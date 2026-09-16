@@ -12,7 +12,8 @@ import {
   ShieldCheck,
   KeyRound,
   AlertCircle,
-  Radio,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import QuestionManager from './QuestionManager';
 import ScientistManager from './ScientistManager';
@@ -37,18 +38,22 @@ export default function AdminDashboard({
   const [scientists, setScientists] = useState<Scientist[]>([]);
   const [currentRound, setCurrentRound] = useState<number>(1);
 
-  // Login Form State
+  // Login Form State - Starts completely empty (no hardcoded credentials or defaults)
   const [loginMethod, setLoginMethod] = useState<'password' | 'code'>('password');
-  const [email, setEmail] = useState('admin@binaries.com');
-  const [password, setPassword] = useState('BinariesAdmin2026!');
-  const [securityCode, setSecurityCode] = useState('BINARIES2026');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [securityCode, setSecurityCode] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showPasscode, setShowPasscode] = useState(false);
 
   // Check login status on mount
   useEffect(() => {
     checkSession();
-    fetchScientistsAndSettings();
+    if (isAdminLoggedIn) {
+      fetchScientistsAndSettings();
+    }
   }, [isAdminLoggedIn]);
 
   const checkSession = async () => {
@@ -83,6 +88,14 @@ export default function AdminDashboard({
     }
   };
 
+  const switchLoginMethod = (method: 'password' | 'code') => {
+    setLoginMethod(method);
+    setLoginError(null);
+    setEmail('');
+    setPassword('');
+    setSecurityCode('');
+  };
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError(null);
@@ -91,8 +104,8 @@ export default function AdminDashboard({
     try {
       const payload =
         loginMethod === 'code'
-          ? { securityCode }
-          : { email, password };
+          ? { securityCode: securityCode.trim() }
+          : { email: email.trim(), password };
 
       const res = await fetch('/api/auth/login', {
         method: 'POST',
@@ -106,6 +119,10 @@ export default function AdminDashboard({
       }
 
       soundManager.playClick();
+      // Immediately clear sensitive credentials from component state
+      setEmail('');
+      setPassword('');
+      setSecurityCode('');
       setIsAdminLoggedIn(true);
       await fetchScientistsAndSettings();
     } catch (err: any) {
@@ -120,12 +137,16 @@ export default function AdminDashboard({
       soundManager.playClick();
       await fetch('/api/auth/logout', { method: 'POST' });
       setIsAdminLoggedIn(false);
+      setEmail('');
+      setPassword('');
+      setSecurityCode('');
+      setLoginError(null);
     } catch (err) {
       console.error('Logout error:', err);
     }
   };
 
-  // IF NOT AUTHENTICATED: RENDER SECURE LOGIN FORM
+  // IF NOT AUTHENTICATED: RENDER SECURE LOGIN FORM (COMPLETELY EMPTY INPUTS)
   if (!isAdminLoggedIn) {
     return (
       <div className="max-w-md mx-auto px-4 py-16">
@@ -145,7 +166,7 @@ export default function AdminDashboard({
           <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-800 rounded-xl mb-5">
             <button
               type="button"
-              onClick={() => setLoginMethod('password')}
+              onClick={() => switchLoginMethod('password')}
               className={`py-1.5 text-xs font-bold rounded-lg transition-all ${
                 loginMethod === 'password'
                   ? 'bg-purple-600 text-white shadow'
@@ -156,7 +177,7 @@ export default function AdminDashboard({
             </button>
             <button
               type="button"
-              onClick={() => setLoginMethod('code')}
+              onClick={() => switchLoginMethod('code')}
               className={`py-1.5 text-xs font-bold rounded-lg transition-all ${
                 loginMethod === 'code'
                   ? 'bg-purple-600 text-white shadow'
@@ -174,7 +195,7 @@ export default function AdminDashboard({
             </div>
           )}
 
-          <form onSubmit={handleLogin} className="space-y-4">
+          <form onSubmit={handleLogin} autoComplete="off" className="space-y-4">
             {loginMethod === 'password' ? (
               <>
                 <div>
@@ -183,10 +204,13 @@ export default function AdminDashboard({
                   </label>
                   <input
                     type="email"
+                    name="admin_email_field"
                     required
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-800 border border-slate-700 text-sm text-white focus:border-purple-500 focus:outline-none"
+                    autoComplete="off"
+                    placeholder="Enter admin email address..."
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-800 border border-slate-700 text-sm text-white placeholder-slate-500 focus:border-purple-500 focus:outline-none transition-colors"
                   />
                 </div>
 
@@ -194,13 +218,26 @@ export default function AdminDashboard({
                   <label className="block text-xs font-semibold text-slate-300 mb-1">
                     Master Password
                   </label>
-                  <input
-                    type="password"
-                    required
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-800 border border-slate-700 text-sm text-white focus:border-purple-500 focus:outline-none"
-                  />
+                  <div className="relative">
+                    <input
+                      type={showPassword ? 'text' : 'password'}
+                      name="admin_password_field"
+                      required
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      autoComplete="new-password"
+                      placeholder="Enter master password..."
+                      className="w-full pl-3.5 pr-10 py-2.5 rounded-xl bg-slate-800 border border-slate-700 text-sm text-white placeholder-slate-500 focus:border-purple-500 focus:outline-none transition-colors"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200"
+                      tabIndex={-1}
+                    >
+                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
                 </div>
               </>
             ) : (
@@ -211,13 +248,23 @@ export default function AdminDashboard({
                 <div className="relative">
                   <KeyRound className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                   <input
-                    type="text"
+                    type={showPasscode ? 'text' : 'password'}
+                    name="admin_passcode_field"
                     required
                     value={securityCode}
                     onChange={(e) => setSecurityCode(e.target.value)}
-                    placeholder="e.g., BINARIES2026"
-                    className="w-full pl-10 pr-3.5 py-2.5 rounded-xl bg-slate-800 border border-slate-700 text-sm text-white focus:border-purple-500 focus:outline-none font-mono"
+                    autoComplete="off"
+                    placeholder="Enter security passcode..."
+                    className="w-full pl-10 pr-10 py-2.5 rounded-xl bg-slate-800 border border-slate-700 text-sm text-white placeholder-slate-500 focus:border-purple-500 focus:outline-none font-mono transition-colors"
                   />
+                  <button
+                    type="button"
+                    onClick={() => setShowPasscode(!showPasscode)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200"
+                    tabIndex={-1}
+                  >
+                    {showPasscode ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
                 </div>
               </div>
             )}
@@ -225,7 +272,7 @@ export default function AdminDashboard({
             <button
               type="submit"
               disabled={isLoggingIn}
-              className="w-full py-3 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold text-sm shadow-xl shadow-purple-600/30 flex items-center justify-center space-x-2 transition-all"
+              className="w-full py-3 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold text-sm shadow-xl shadow-purple-600/30 flex items-center justify-center space-x-2 transition-all cursor-pointer"
             >
               <ShieldCheck className="w-4 h-4" />
               <span>{isLoggingIn ? 'Authenticating...' : 'Access Admin Suite'}</span>
@@ -261,7 +308,7 @@ export default function AdminDashboard({
 
         <button
           onClick={handleLogout}
-          className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-rose-400 text-xs font-semibold border border-slate-700 flex items-center space-x-1.5 transition-colors"
+          className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-rose-400 text-xs font-semibold border border-slate-700 flex items-center space-x-1.5 transition-colors cursor-pointer"
         >
           <LogOut className="w-3.5 h-3.5" />
           <span>Exit Admin</span>
@@ -286,7 +333,7 @@ export default function AdminDashboard({
                 soundManager.playClick();
                 setActiveSubTab(tab.id as AdminTab);
               }}
-              className={`flex items-center space-x-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold shrink-0 transition-all ${
+              className={`flex items-center space-x-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold shrink-0 transition-all cursor-pointer ${
                 isActive
                   ? 'bg-purple-600 text-white shadow-lg shadow-purple-600/25'
                   : 'bg-slate-900/80 text-slate-400 hover:text-slate-200 hover:bg-slate-800 border border-slate-800'
