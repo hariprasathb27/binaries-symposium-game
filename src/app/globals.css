@@ -1,0 +1,92 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-primary: #050811;
+  --bg-card: rgba(15, 23, 42, 0.85);
+  --border-cyan: rgba(56, 189, 248, 0.25);
+  --glow-cyan: 0 0 20px rgba(14, 165, 233, 0.35);
+  --glow-gold: 0 0 25px rgba(234, 179, 8, 0.45);
+}
+
+body {
+  background-color: var(--bg-primary);
+  color: #f8fafc;
+  min-height: 100vh;
+  overflow-x: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  background-image: 
+    radial-gradient(circle at 15% 15%, rgba(14, 165, 233, 0.08) 0%, transparent 40%),
+    radial-gradient(circle at 85% 85%, rgba(168, 85, 247, 0.07) 0%, transparent 40%),
+    linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+  background-size: 100% 100%, 100% 100%, 40px 40px, 40px 40px;
+}
+
+/* Custom modern scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #090d1a;
+}
+::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #38bdf8;
+}
+
+/* Glassmorphism panel */
+.glass-panel {
+  background: rgba(15, 23, 42, 0.75);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(56, 189, 248, 0.2);
+  border-radius: 1rem;
+}
+
+.glass-panel-gold {
+  background: rgba(30, 27, 75, 0.6);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(234, 179, 8, 0.35);
+  border-radius: 1rem;
+}
+
+/* Cyber button glow */
+.btn-cyber {
+  position: relative;
+  transition: all 0.2s ease-in-out;
+}
+.btn-cyber:hover {
+  box-shadow: 0 0 15px rgba(56, 189, 248, 0.5);
+  transform: translateY(-1px);
+}
+
+/* Shimmer effect */
+@keyframes shimmerAnim {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.shimmer-text {
+  background: linear-gradient(90deg, #38bdf8 0%, #ffffff 50%, #38bdf8 100%);
+  background-size: 200% auto;
+  color: transparent;
+  -webkit-background-clip: text;
+  background-clip: text;
+  animation: shimmerAnim 4s linear infinite;
+}
+
+/* Question Option Card Selection Transitions */
+.option-card {
+  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.option-card:hover:not(:disabled) {
+  transform: translateX(4px);
+  border-color: rgba(56, 189, 248, 0.6);
+}
