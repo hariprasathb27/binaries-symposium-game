@@ -25,6 +25,21 @@ function getDbPath(): string {
     }
     return resolved;
   }
+
+  // On Vercel serverless environments, /var/task is read-only.
+  // Never attempt to create /var/task/data. Use /tmp/data if SQLite is ever called on Vercel.
+  if (process.env.VERCEL === '1' || process.env.VERCEL_ENV) {
+    const tmpDir = path.resolve('/tmp', 'data');
+    if (!fs.existsSync(tmpDir)) {
+      try {
+        fs.mkdirSync(tmpDir, { recursive: true });
+      } catch (e) {
+        console.warn('Could not create /tmp/data on Vercel:', e);
+      }
+    }
+    return path.join(tmpDir, 'binaries.db');
+  }
+
   const defaultDir = path.resolve(process.cwd(), 'data');
   if (!fs.existsSync(defaultDir)) {
     fs.mkdirSync(defaultDir, { recursive: true });

@@ -25,6 +25,31 @@ export const FIRESTORE_COLLECTIONS = {
   LOGS: 'audit_logs',
 };
 
+function cleanEnvValue(val: string | undefined): string | undefined {
+  if (!val) return undefined;
+  let cleaned = val.trim();
+  if (
+    (cleaned.startsWith('"') && cleaned.endsWith('"')) ||
+    (cleaned.startsWith("'") && cleaned.endsWith("'"))
+  ) {
+    cleaned = cleaned.slice(1, -1).trim();
+  }
+  return cleaned || undefined;
+}
+
+function cleanPrivateKey(rawKey: string | undefined): string | undefined {
+  if (!rawKey) return undefined;
+  let key = rawKey.trim();
+  if (
+    (key.startsWith('"') && key.endsWith('"')) ||
+    (key.startsWith("'") && key.endsWith("'"))
+  ) {
+    key = key.slice(1, -1).trim();
+  }
+  key = key.replace(/\\n/g, '\n');
+  return key || undefined;
+}
+
 function getFirestoreDb(): Firestore {
   if (firestoreInstance) {
     return firestoreInstance;
@@ -34,12 +59,16 @@ function getFirestoreDb(): Firestore {
   let app: App;
 
   if (apps.length === 0) {
-    const projectId = process.env.FIREBASE_PROJECT_ID;
-    const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
-    const rawPrivateKey = process.env.FIREBASE_PRIVATE_KEY;
+    const projectId = cleanEnvValue(
+      process.env.FIREBASE_PROJECT_ID ||
+      process.env.GCP_PROJECT ||
+      process.env.GCLOUD_PROJECT ||
+      process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID
+    );
+    const clientEmail = cleanEnvValue(process.env.FIREBASE_CLIENT_EMAIL);
+    const privateKey = cleanPrivateKey(process.env.FIREBASE_PRIVATE_KEY);
 
-    if (projectId && clientEmail && rawPrivateKey) {
-      const privateKey = rawPrivateKey.replace(/\\n/g, '\n');
+    if (projectId && clientEmail && privateKey) {
       app = initializeApp({
         credential: cert({
           projectId,
