@@ -12,18 +12,20 @@ interface TimerProps {
 }
 
 export default function Timer({
-  duration,
+  duration = 20,
   onTimeUp,
   isPaused = false,
   questionKey,
 }: TimerProps) {
-  const [timeLeft, setTimeLeft] = useState<number>(duration);
+  const [timeLeft, setTimeLeft] = useState<number>(duration || 20);
   const onTimeUpRef = useRef(onTimeUp);
   onTimeUpRef.current = onTimeUp;
+  const hasFiredRef = useRef<boolean>(false);
 
   // Reset timer whenever duration or question changes
   useEffect(() => {
-    setTimeLeft(duration);
+    setTimeLeft(duration || 20);
+    hasFiredRef.current = false;
   }, [duration, questionKey]);
 
   useEffect(() => {
@@ -33,8 +35,11 @@ export default function Timer({
       setTimeLeft((prev) => {
         if (prev <= 1) {
           clearInterval(interval);
-          soundManager.playTimeUp();
-          onTimeUpRef.current();
+          if (!hasFiredRef.current) {
+            hasFiredRef.current = true;
+            soundManager.playTimeUp();
+            onTimeUpRef.current();
+          }
           return 0;
         }
 

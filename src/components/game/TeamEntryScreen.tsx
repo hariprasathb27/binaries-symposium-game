@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Users, User, Play, Sparkles, Atom, Clock, HelpCircle, Cpu, ShieldCheck } from 'lucide-react';
 import { soundManager } from '@/lib/sound';
 
@@ -24,6 +24,24 @@ export default function TeamEntryScreen({
   const [teamName, setTeamName] = useState<string>('');
   const [participantName, setParticipantName] = useState<string>('');
   const [touched, setTouched] = useState<boolean>(false);
+
+  // Explicitly wipe all game-related sessionStorage keys on mount to guarantee a 100% clean slate for every new team
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      sessionStorage.removeItem('binaries_game_started');
+      sessionStorage.removeItem('binaries_participant_team');
+      sessionStorage.removeItem('binaries_participant_name');
+      sessionStorage.removeItem('binaries_current_score');
+      sessionStorage.removeItem('binaries_timer_duration');
+      sessionStorage.removeItem('binaries_game_status');
+
+      Object.keys(sessionStorage).forEach((key) => {
+        if (key.startsWith('binaries_') && !key.includes('admin')) {
+          sessionStorage.removeItem(key);
+        }
+      });
+    }
+  }, []);
 
   const trimmedTeam = teamName.trim();
   const isTeamValid = trimmedTeam.length >= 2 && trimmedTeam.length <= 50;

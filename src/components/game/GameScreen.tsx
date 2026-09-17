@@ -84,6 +84,48 @@ export default function GameScreen({ onNavigateToWinners }: GameScreenProps) {
 
   const autoNextTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Comprehensive reset of all game session states and timers for a clean team transition
+  const clearSessionAndState = useCallback(() => {
+    if (autoNextTimeoutRef.current) {
+      clearTimeout(autoNextTimeoutRef.current);
+      autoNextTimeoutRef.current = null;
+    }
+
+    setScore(0);
+    setStreak(0);
+    setSelectedOption(null);
+    setIsSubmitted(false);
+    setIsSubmitting(false);
+    setIsTimeUp(false);
+    setSubmissionResult(null);
+    setCurrentQuestion(null);
+    setGameStatus('active');
+    setError(null);
+
+    if (typeof window !== 'undefined') {
+      sessionStorage.removeItem('binaries_game_started');
+      sessionStorage.removeItem('binaries_participant_team');
+      sessionStorage.removeItem('binaries_participant_name');
+      sessionStorage.removeItem('binaries_current_score');
+      sessionStorage.removeItem('binaries_timer_duration');
+      sessionStorage.removeItem('binaries_game_status');
+      Object.keys(sessionStorage).forEach((key) => {
+        if (key.startsWith('binaries_') && !key.includes('admin')) {
+          sessionStorage.removeItem(key);
+        }
+      });
+    }
+  }, []);
+
+  // Clean up any pending auto-next timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (autoNextTimeoutRef.current) {
+        clearTimeout(autoNextTimeoutRef.current);
+      }
+    };
+  }, []);
+
   // Fetch current question (strictly only called AFTER game has started)
   const fetchCurrentQuestion = useCallback(async () => {
     try {
@@ -91,6 +133,7 @@ export default function GameScreen({ onNavigateToWinners }: GameScreenProps) {
       setError(null);
       setSelectedOption(null);
       setIsSubmitted(false);
+      setIsSubmitting(false);
       setIsTimeUp(false);
       setSubmissionResult(null);
 
@@ -106,7 +149,13 @@ export default function GameScreen({ onNavigateToWinners }: GameScreenProps) {
         setCurrentRound(json.settings.current_round || 1);
         setTotalRounds(json.settings.total_rounds || 3);
         setAutoNext(Boolean(json.settings.auto_next));
-        setGameStatus(json.settings.game_status || 'active');
+
+        // Critical safeguard: Only mark gameStatus as completed if there is truly no question data returned
+        if (!json.data && json.settings.game_status === 'completed') {
+          setGameStatus('completed');
+        } else {
+          setGameStatus('active');
+        }
       }
 
       setCurrentQuestion(json.data);
@@ -131,7 +180,6 @@ export default function GameScreen({ onNavigateToWinners }: GameScreenProps) {
           setTotalRounds(s.total_rounds || 3);
           setQuestionsPerRound(s.questions_per_round || 5);
           setAutoNext(Boolean(s.auto_next));
-          setGameStatus(s.game_status || 'active');
           if (s.instructions) {
             setInstructionsText(s.instructions);
           }
@@ -157,6 +205,25 @@ export default function GameScreen({ onNavigateToWinners }: GameScreenProps) {
 
   // Handle Start Game from Team Entry Screen
   const handleStartGame = (newTeam: string, newParticipant: string) => {
+    // 1. Wipe any leftover timeouts
+    if (autoNextTimeoutRef.current) {
+      clearTimeout(autoNextTimeoutRef.current);
+      autoNextTimeoutRef.current = null;
+    }
+
+    // 2. Reset all per-team states to guarantee a clean slate
+    setScore(0);
+    setStreak(0);
+    setSelectedOption(null);
+    setIsSubmitted(false);
+    setIsSubmitting(false);
+    setIsTimeUp(false);
+    setSubmissionResult(null);
+    setCurrentQuestion(null);
+    setError(null);
+    setGameStatus('active');
+
+    // 3. Set new team credentials
     setTeamName(newTeam);
     setParticipantName(newParticipant);
     setIsGameStarted(true);
@@ -165,6 +232,7 @@ export default function GameScreen({ onNavigateToWinners }: GameScreenProps) {
       sessionStorage.setItem('binaries_game_started', 'true');
       sessionStorage.setItem('binaries_participant_team', newTeam);
       sessionStorage.setItem('binaries_participant_name', newParticipant);
+      sessionStorage.setItem('binaries_current_score', '0');
     }
 
     soundManager.playClick();
@@ -174,33 +242,23 @@ export default function GameScreen({ onNavigateToWinners }: GameScreenProps) {
   // Handle Leaving / Resetting Team Session
   const handleExitSession = () => {
     if (window.confirm('Are you sure you want to change team or leave the current quiz session?')) {
-      if (autoNextTimeoutRef.current) {
-        clearTimeout(autoNextTimeoutRef.current);
-      }
+      clearSessionAndState();
       setIsGameStarted(false);
       setTeamName('');
       setParticipantName('');
-      setCurrentQuestion(null);
-      setScore(0);
-      setStreak(0);
-
-      if (typeof window !== 'undefined') {
-        sessionStorage.removeItem('binaries_game_started');
-        sessionStorage.removeItem('binaries_participant_team');
-        sessionStorage.removeItem('binaries_participant_name');
-      }
     }
   };
 
   // Handle Answer Selection
   const handleSelectOption = (key: OptionKey) => {
-    if (isSubmitted || isTimeUp) return;
+    if (!isGameStarted || isSubmitted || isTimeUp || isSubmitting) return;
     setSelectedOption(key);
   };
 
   // Handle Answer Submit
   const handleSubmitAnswer = async () => {
-    if (!currentQuestion || !selectedOption || isSubmitted || isSubmitting) return;
+    // Strict safeguard: Must have game started, an active question, a selected option, and not already submitted/submitting
+    if (!isGameStarted || !currentQuestion || !selectedOption || isSubmitted || isSubmitting) return;
 
     try {
       setIsSubmitting(true);
@@ -217,6 +275,8 @@ export default function GameScreen({ onNavigateToWinners }: GameScreenProps) {
           selected_option: selectedOption,
           participant_id: participantId,
           submission_token: submissionToken,
+          team_name: teamName,
+          participant_name: participantName,
         }),
       });
 
@@ -254,12 +314,17 @@ export default function GameScreen({ onNavigateToWinners }: GameScreenProps) {
 
   // Handle Time Up
   const handleTimeUp = () => {
+    // Strict safeguard: only process if game is active, loaded, and not already submitted or submitting
+    if (!isGameStarted || loading || !currentQuestion || isSubmitted || isSubmitting) {
+      return;
+    }
+
     setIsTimeUp(true);
-    if (!isSubmitted) {
-      // If an option was selected before timer expired, auto submit it!
-      if (selectedOption) {
-        handleSubmitAnswer();
-      }
+
+    // Only auto-submit if the participant actually selected an option before time expired!
+    // Never auto-submit an empty selection or trigger a false zero-score submission.
+    if (selectedOption && !isSubmitted && !isSubmitting) {
+      handleSubmitAnswer();
     }
   };
 
@@ -366,12 +431,10 @@ export default function GameScreen({ onNavigateToWinners }: GameScreenProps) {
 
             <button
               onClick={() => {
+                clearSessionAndState();
                 setIsGameStarted(false);
                 setTeamName('');
                 setParticipantName('');
-                if (typeof window !== 'undefined') {
-                  sessionStorage.removeItem('binaries_game_started');
-                }
               }}
               className="w-full sm:w-auto px-6 py-3.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-sm border border-slate-700 flex items-center justify-center space-x-2 transition-all cursor-pointer"
             >
@@ -513,10 +576,11 @@ export default function GameScreen({ onNavigateToWinners }: GameScreenProps) {
           REMAINING TIME
         </div>
         <Timer
-          duration={timerDuration}
+          key={`timer_${teamName}_${currentQuestion.id}_${currentRound}_${currentQuestion.current_question_index ?? 0}`}
+          duration={timerDuration || 20}
           onTimeUp={handleTimeUp}
-          isPaused={isSubmitted}
-          questionKey={currentQuestion.id}
+          isPaused={isSubmitted || isSubmitting || loading || !isGameStarted}
+          questionKey={`${teamName}_${currentQuestion.id}`}
         />
         {isTimeUp && !isSubmitted && (
           <p className="mt-2 text-xs font-bold text-rose-400 animate-pulse">
