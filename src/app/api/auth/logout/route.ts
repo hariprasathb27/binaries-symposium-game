@@ -5,7 +5,7 @@ import { logAudit } from '@/lib/db';
 export const dynamic = 'force-dynamic';
 
 export async function POST() {
-  logAudit('ADMIN_LOGOUT', 'Admin logged out');
+  await logAudit('ADMIN_LOGOUT', 'Admin logged out');
   const response = NextResponse.json({
     success: true,
     message: 'Logged out successfully',

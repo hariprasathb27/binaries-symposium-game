@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { SignJWT, jwtVerify } from 'jose';
 import { cookies } from 'next/headers';
-import { getDb } from './db';
+import { getAdminUserByEmail, insertAdminUser, isFirestoreProvider } from './db';
 
 const SESSION_COOKIE_NAME = 'binaries_admin_session';
 const SESSION_SECRET_STRING = process.env.SESSION_SECRET || 'binaries_default_super_secure_key_2026_symposium_quiz';
@@ -62,21 +62,31 @@ export async function getCurrentAdminSession(): Promise<{ id: string; email: str
 export { SESSION_COOKIE_NAME };
 
 // -------------------------------------------------------------
-// INITIALIZE DEFAULT ADMIN USER
+// INITIALIZE DEFAULT ADMIN USER (SQLITE DEVELOPMENT ONLY)
 // -------------------------------------------------------------
-export function ensureDefaultAdmin(): void {
-  const db = getDb();
+export async function ensureDefaultAdmin(): Promise<void> {
+  if (isFirestoreProvider()) {
+    // In Firestore mode, do NOT auto-seed on startup or request.
+    // Use `npm run db:seed:firestore` instead.
+    return;
+  }
+
   const defaultEmail = process.env.ADMIN_EMAIL || 'admin@binaries.com';
   const defaultPass = process.env.ADMIN_PASSWORD || 'BinariesAdmin2026!';
 
-  const existing = db.prepare('SELECT id FROM admin_users WHERE email = ?').get(defaultEmail);
+  const existing = await getAdminUserByEmail(defaultEmail);
   if (!existing) {
     const { hash, salt } = hashPassword(defaultPass);
     const id = 'admin_root';
     const now = new Date().toISOString();
-    db.prepare(`
-      INSERT INTO admin_users (id, email, password_hash, salt, role, created_at, last_login)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(id, defaultEmail, hash, salt, 'superadmin', now, null);
+    await insertAdminUser({
+      id,
+      email: defaultEmail,
+      password_hash: hash,
+      salt,
+      role: 'superadmin',
+      created_at: now,
+    });
   }
 }
+

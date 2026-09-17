@@ -15,9 +15,9 @@ export async function POST(req: NextRequest) {
     const mode = body.mode === 'round' ? 'round' : 'all';
     const roundNumber = body.roundNumber !== undefined ? Number(body.roundNumber) : undefined;
 
-    const questions = shuffleQuestions(mode, roundNumber);
+    const questions = await shuffleQuestions(mode, roundNumber);
 
-    logAudit('QUESTIONS_SHUFFLED', `Questions shuffled (mode: ${mode}, round: ${roundNumber ?? 'all'}) by ${session.email}`);
+    await logAudit('QUESTIONS_SHUFFLED', `Questions shuffled (mode: ${mode}, round: ${roundNumber ?? 'all'}) by ${session.email}`);
 
     return NextResponse.json({
       success: true,

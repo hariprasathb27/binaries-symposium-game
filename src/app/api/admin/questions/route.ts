@@ -15,7 +15,7 @@ export async function GET(req: NextRequest) {
   const round = searchParams.get('round');
   const roundNum = round ? parseInt(round, 10) : undefined;
 
-  const questions = getQuestions(roundNum);
+  const questions = await getQuestions(roundNum);
   return NextResponse.json({ success: true, data: questions });
 }
 
@@ -48,7 +48,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const scientist = getScientistById(scientist_id);
+    const scientist = await getScientistById(scientist_id);
     if (!scientist) {
       return NextResponse.json(
         { success: false, message: 'Selected scientist does not exist.' },
@@ -71,7 +71,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const newQuestion = createQuestion({
+    const newQuestion = await createQuestion({
       scientist_id,
       question_text: question_text.trim(),
       option_a: option_a.trim(),
@@ -86,7 +86,7 @@ export async function POST(req: NextRequest) {
       active: true,
     });
 
-    logAudit('QUESTION_CREATED', `Question created: ${newQuestion.id} by ${session.email}`);
+    await logAudit('QUESTION_CREATED', `Question created: ${newQuestion.id} by ${session.email}`);
 
     return NextResponse.json({
       success: true,
@@ -125,12 +125,12 @@ export async function PUT(req: NextRequest) {
       }
     }
 
-    const updated = updateQuestion(id, data);
+    const updated = await updateQuestion(id, data);
     if (!updated) {
       return NextResponse.json({ success: false, message: 'Question not found.' }, { status: 404 });
     }
 
-    logAudit('QUESTION_UPDATED', `Question updated: ${id} by ${session.email}`);
+    await logAudit('QUESTION_UPDATED', `Question updated: ${id} by ${session.email}`);
 
     return NextResponse.json({
       success: true,
@@ -159,12 +159,12 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ success: false, message: 'Question ID is required' }, { status: 400 });
     }
 
-    const deleted = deleteQuestion(id);
+    const deleted = await deleteQuestion(id);
     if (!deleted) {
       return NextResponse.json({ success: false, message: 'Question not found or already deleted' }, { status: 404 });
     }
 
-    logAudit('QUESTION_DELETED', `Question deleted: ${id} by ${session.email}`);
+    await logAudit('QUESTION_DELETED', `Question deleted: ${id} by ${session.email}`);
 
     return NextResponse.json({
       success: true,

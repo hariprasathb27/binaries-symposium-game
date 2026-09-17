@@ -5,9 +5,13 @@ export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    const settings = getGameSettings();
-    const roundQuestions = getQuestions(settings.current_round).filter((q) => q.active);
-    const allQuestions = getQuestions().filter((q) => q.active);
+    const settings = await getGameSettings();
+    const [roundQuestionsRaw, allQuestionsRaw] = await Promise.all([
+      getQuestions(settings.current_round),
+      getQuestions(),
+    ]);
+    const roundQuestions = roundQuestionsRaw.filter((q) => q.active);
+    const allQuestions = allQuestionsRaw.filter((q) => q.active);
 
     return NextResponse.json({
       success: true,

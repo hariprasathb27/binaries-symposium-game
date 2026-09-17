@@ -10,7 +10,7 @@ export async function GET() {
     return NextResponse.json({ success: false, message: 'Unauthorized' }, { status: 401 });
   }
 
-  const components = getComponents();
+  const components = await getComponents();
   return NextResponse.json({ success: true, data: components });
 }
 
@@ -26,8 +26,8 @@ export async function POST(req: NextRequest) {
 
     // Handle shuffle action on components
     if (action === 'shuffle') {
-      const shuffled = shuffleComponents();
-      logAudit('COMPONENTS_SHUFFLED', `Admin ${session.email} shuffled components`);
+      const shuffled = await shuffleComponents();
+      await logAudit('COMPONENTS_SHUFFLED', `Admin ${session.email} shuffled components`);
       return NextResponse.json({
         success: true,
         message: 'Components shuffled successfully',
@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const component = createComponent({
+    const component = await createComponent({
       name: name.trim(),
       image_url: image_url?.trim() || 'https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=400&q=80',
       description: description.trim(),
@@ -51,7 +51,7 @@ export async function POST(req: NextRequest) {
       active: true,
     });
 
-    logAudit('COMPONENT_CREATED', `Component created: ${component.name} by ${session.email}`);
+    await logAudit('COMPONENT_CREATED', `Component created: ${component.name} by ${session.email}`);
 
     return NextResponse.json({
       success: true,
@@ -80,12 +80,12 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ success: false, message: 'Component ID is required.' }, { status: 400 });
     }
 
-    const updated = updateComponent(id, data);
+    const updated = await updateComponent(id, data);
     if (!updated) {
       return NextResponse.json({ success: false, message: 'Component not found.' }, { status: 404 });
     }
 
-    logAudit('COMPONENT_UPDATED', `Component updated: ${id} by ${session.email}`);
+    await logAudit('COMPONENT_UPDATED', `Component updated: ${id} by ${session.email}`);
 
     return NextResponse.json({
       success: true,
@@ -114,12 +114,12 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ success: false, message: 'Component ID is required' }, { status: 400 });
     }
 
-    const deleted = deleteComponent(id);
+    const deleted = await deleteComponent(id);
     if (!deleted) {
       return NextResponse.json({ success: false, message: 'Component not found' }, { status: 404 });
     }
 
-    logAudit('COMPONENT_DELETED', `Component deleted: ${id} by ${session.email}`);
+    await logAudit('COMPONENT_DELETED', `Component deleted: ${id} by ${session.email}`);
 
     return NextResponse.json({
       success: true,

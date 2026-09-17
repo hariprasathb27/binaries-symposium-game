@@ -10,7 +10,7 @@ export async function GET() {
     return NextResponse.json({ success: false, message: 'Unauthorized' }, { status: 401 });
   }
 
-  const winners = getWinners();
+  const winners = await getWinners();
   return NextResponse.json({ success: true, data: winners });
 }
 
@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const winner = createWinner({
+    const winner = await createWinner({
       position: Number(position) || 1,
       team_name: team_name.trim(),
       participant_name: participant_name.trim(),
@@ -39,7 +39,7 @@ export async function POST(req: NextRequest) {
       completion_time: completion_time?.trim() || '00:00',
     });
 
-    logAudit('WINNER_CREATED', `Winner created: Position ${winner.position} - ${winner.team_name} by ${session.email}`);
+    await logAudit('WINNER_CREATED', `Winner created: Position ${winner.position} - ${winner.team_name} by ${session.email}`);
 
     return NextResponse.json({
       success: true,
@@ -68,12 +68,12 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ success: false, message: 'Winner ID is required.' }, { status: 400 });
     }
 
-    const updated = updateWinner(id, data);
+    const updated = await updateWinner(id, data);
     if (!updated) {
       return NextResponse.json({ success: false, message: 'Winner not found.' }, { status: 404 });
     }
 
-    logAudit('WINNER_UPDATED', `Winner updated: ${id} by ${session.email}`);
+    await logAudit('WINNER_UPDATED', `Winner updated: ${id} by ${session.email}`);
 
     return NextResponse.json({
       success: true,
@@ -102,12 +102,12 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ success: false, message: 'Winner ID is required' }, { status: 400 });
     }
 
-    const deleted = deleteWinner(id);
+    const deleted = await deleteWinner(id);
     if (!deleted) {
       return NextResponse.json({ success: false, message: 'Winner not found' }, { status: 404 });
     }
 
-    logAudit('WINNER_DELETED', `Winner deleted: ${id} by ${session.email}`);
+    await logAudit('WINNER_DELETED', `Winner deleted: ${id} by ${session.email}`);
 
     return NextResponse.json({
       success: true,

@@ -11,8 +11,8 @@ export async function POST() {
   }
 
   try {
-    const settings = resetGame();
-    logAudit('GAME_RESET', `Game state was reset to Round 1, Question 0 by ${session.email}`);
+    const settings = await resetGame();
+    await logAudit('GAME_RESET', `Game state was reset to Round 1, Question 0 by ${session.email}`);
 
     return NextResponse.json({
       success: true,

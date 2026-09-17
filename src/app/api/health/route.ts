@@ -5,12 +5,12 @@ export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    const health = getHealthStatus();
+    const health = await getHealthStatus();
     return NextResponse.json({
       status: 'ok',
       service: 'binaries-symposium-api',
       timestamp: health.timestamp,
-      database: 'connected (sqlite-native)',
+      database: health.database,
       metrics: {
         questions: health.questionsCount,
         scientists: health.scientistsCount,

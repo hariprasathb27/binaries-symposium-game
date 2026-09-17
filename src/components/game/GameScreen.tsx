@@ -5,6 +5,7 @@ import { PublicQuestion, OptionKey, SubmitAnswerResponse, ComponentItem } from '
 import ScientistCard from './ScientistCard';
 import QuestionCard from './QuestionCard';
 import Timer from './Timer';
+import TeamEntryScreen from './TeamEntryScreen';
 import InstructionsModal from './InstructionsModal';
 import ComponentReferenceModal from './ComponentReferenceModal';
 import {
@@ -19,6 +20,8 @@ import {
   CheckCircle2,
   XCircle,
   AlertCircle,
+  Users,
+  LogOut,
 } from 'lucide-react';
 import { soundManager } from '@/lib/sound';
 
@@ -27,15 +30,38 @@ interface GameScreenProps {
 }
 
 export default function GameScreen({ onNavigateToWinners }: GameScreenProps) {
+  // Participant & Team Session State
+  const [isGameStarted, setIsGameStarted] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      return sessionStorage.getItem('binaries_game_started') === 'true';
+    }
+    return false;
+  });
+
+  const [teamName, setTeamName] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      return sessionStorage.getItem('binaries_participant_team') || '';
+    }
+    return '';
+  });
+
+  const [participantName, setParticipantName] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      return sessionStorage.getItem('binaries_participant_name') || '';
+    }
+    return '';
+  });
+
   // Game state
   const [currentQuestion, setCurrentQuestion] = useState<PublicQuestion | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
+  const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Settings & Progress
+  // Settings & Progress (Defaults, synced from server)
   const [timerDuration, setTimerDuration] = useState<number>(20);
   const [currentRound, setCurrentRound] = useState<number>(1);
   const [totalRounds, setTotalRounds] = useState<number>(3);
+  const [questionsPerRound, setQuestionsPerRound] = useState<number>(5);
   const [autoNext, setAutoNext] = useState<boolean>(false);
   const [gameStatus, setGameStatus] = useState<string>('active');
 
@@ -49,17 +75,6 @@ export default function GameScreen({ onNavigateToWinners }: GameScreenProps) {
   // Participant Score & Streak
   const [score, setScore] = useState<number>(0);
   const [streak, setStreak] = useState<number>(0);
-  const [participantId] = useState<string>(() => {
-    if (typeof window !== 'undefined') {
-      let id = localStorage.getItem('binaries_participant_id');
-      if (!id) {
-        id = `team_${Math.random().toString(36).substring(2, 8)}`;
-        localStorage.setItem('binaries_participant_id', id);
-      }
-      return id;
-    }
-    return 'participant_default';
-  });
 
   // Modals
   const [showInstructions, setShowInstructions] = useState<boolean>(false);
@@ -69,7 +84,7 @@ export default function GameScreen({ onNavigateToWinners }: GameScreenProps) {
 
   const autoNextTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Fetch current question
+  // Fetch current question (strictly only called AFTER game has started)
   const fetchCurrentQuestion = useCallback(async () => {
     try {
       setLoading(true);
@@ -103,12 +118,29 @@ export default function GameScreen({ onNavigateToWinners }: GameScreenProps) {
     }
   }, []);
 
-  // Fetch supporting components & instructions
+  // Fetch game settings and supporting metadata on mount (does NOT start timer or load question)
   useEffect(() => {
-    fetchCurrentQuestion();
+    // 1. Fetch game settings for metadata & welcome screen
+    fetch('/api/game/state', { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.success && data.data?.settings) {
+          const s = data.data.settings;
+          setTimerDuration(s.timer_duration || 20);
+          setCurrentRound(s.current_round || 1);
+          setTotalRounds(s.total_rounds || 3);
+          setQuestionsPerRound(s.questions_per_round || 5);
+          setAutoNext(Boolean(s.auto_next));
+          setGameStatus(s.game_status || 'active');
+          if (s.instructions) {
+            setInstructionsText(s.instructions);
+          }
+        }
+      })
+      .catch(() => {});
 
-    // Fetch components
-    fetch('/api/game/components')
+    // 2. Fetch components for reference sheet
+    fetch('/api/game/components', { cache: 'no-store' })
       .then((r) => r.json())
       .then((data) => {
         if (data.success && data.data) {
@@ -117,16 +149,48 @@ export default function GameScreen({ onNavigateToWinners }: GameScreenProps) {
       })
       .catch(() => {});
 
-    // Fetch instructions
-    fetch('/api/game/state')
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.success && data.data?.settings?.instructions) {
-          setInstructionsText(data.data.settings.instructions);
-        }
-      })
-      .catch(() => {});
-  }, [fetchCurrentQuestion]);
+    // 3. If the participant already started a session in this browser tab, restore the question
+    if (isGameStarted) {
+      fetchCurrentQuestion();
+    }
+  }, [isGameStarted, fetchCurrentQuestion]);
+
+  // Handle Start Game from Team Entry Screen
+  const handleStartGame = (newTeam: string, newParticipant: string) => {
+    setTeamName(newTeam);
+    setParticipantName(newParticipant);
+    setIsGameStarted(true);
+
+    if (typeof window !== 'undefined') {
+      sessionStorage.setItem('binaries_game_started', 'true');
+      sessionStorage.setItem('binaries_participant_team', newTeam);
+      sessionStorage.setItem('binaries_participant_name', newParticipant);
+    }
+
+    soundManager.playClick();
+    fetchCurrentQuestion();
+  };
+
+  // Handle Leaving / Resetting Team Session
+  const handleExitSession = () => {
+    if (window.confirm('Are you sure you want to change team or leave the current quiz session?')) {
+      if (autoNextTimeoutRef.current) {
+        clearTimeout(autoNextTimeoutRef.current);
+      }
+      setIsGameStarted(false);
+      setTeamName('');
+      setParticipantName('');
+      setCurrentQuestion(null);
+      setScore(0);
+      setStreak(0);
+
+      if (typeof window !== 'undefined') {
+        sessionStorage.removeItem('binaries_game_started');
+        sessionStorage.removeItem('binaries_participant_team');
+        sessionStorage.removeItem('binaries_participant_name');
+      }
+    }
+  };
 
   // Handle Answer Selection
   const handleSelectOption = (key: OptionKey) => {
@@ -140,6 +204,9 @@ export default function GameScreen({ onNavigateToWinners }: GameScreenProps) {
 
     try {
       setIsSubmitting(true);
+      const participantId = teamName
+        ? `team_${teamName.toLowerCase().replace(/[^a-z0-9]/g, '_')}`
+        : 'participant_anonymous';
       const submissionToken = `token_${currentQuestion.id}_${participantId}_${Date.now()}`;
 
       const res = await fetch('/api/game/submit', {
@@ -224,13 +291,50 @@ export default function GameScreen({ onNavigateToWinners }: GameScreenProps) {
     }
   };
 
-  // Quiz Completed View
+  // -------------------------------------------------------------
+  // FLOW 1: TEAM ENTRY SCREEN (Before Start Game)
+  // -------------------------------------------------------------
+  if (!isGameStarted) {
+    return (
+      <div className="w-full pb-20">
+        <InstructionsModal
+          isOpen={showInstructions}
+          onClose={() => setShowInstructions(false)}
+          instructionsText={instructionsText}
+        />
+        <ComponentReferenceModal
+          isOpen={showComponentsModal}
+          onClose={() => setShowComponentsModal(false)}
+          components={componentsList}
+        />
+
+        <TeamEntryScreen
+          onStartGame={handleStartGame}
+          totalRounds={totalRounds}
+          questionsPerRound={questionsPerRound}
+          timerDuration={timerDuration}
+          onShowRules={() => setShowInstructions(true)}
+          onShowReference={() => setShowComponentsModal(true)}
+        />
+      </div>
+    );
+  }
+
+  // -------------------------------------------------------------
+  // FLOW 2: QUIZ COMPLETED VIEW
+  // -------------------------------------------------------------
   if (gameStatus === 'completed') {
     return (
       <div className="max-w-3xl mx-auto px-4 py-16 text-center">
         <div className="rounded-3xl border border-amber-500/40 bg-gradient-to-b from-slate-900/90 via-slate-900/95 to-slate-950/90 p-8 sm:p-12 shadow-2xl shadow-amber-500/20 backdrop-blur-xl">
           <div className="w-20 h-20 mx-auto rounded-3xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400 mb-6 shadow-lg shadow-amber-500/30">
             <Trophy className="w-10 h-10 animate-bounce-subtle" />
+          </div>
+
+          <div className="inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-slate-800 border border-slate-700 text-xs font-mono font-bold text-cyan-300 mb-3">
+            <Users className="w-3.5 h-3.5 text-cyan-400" />
+            <span>Team: {teamName || 'Symposium Participants'}</span>
+            {participantName && <span className="text-slate-400">({participantName})</span>}
           </div>
 
           <h2 className="text-3xl sm:text-4xl font-black text-white tracking-tight mb-2">
@@ -254,18 +358,25 @@ export default function GameScreen({ onNavigateToWinners }: GameScreenProps) {
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
             <button
               onClick={onNavigateToWinners}
-              className="w-full sm:w-auto px-8 py-3.5 rounded-xl bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-400 hover:to-yellow-400 text-slate-950 font-black text-base shadow-xl shadow-amber-500/25 flex items-center justify-center space-x-2 transition-all"
+              className="w-full sm:w-auto px-8 py-3.5 rounded-xl bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-400 hover:to-yellow-400 text-slate-950 font-black text-base shadow-xl shadow-amber-500/25 flex items-center justify-center space-x-2 transition-all cursor-pointer"
             >
               <Trophy className="w-5 h-5" />
               <span>View Winners Podium</span>
             </button>
 
             <button
-              onClick={fetchCurrentQuestion}
-              className="w-full sm:w-auto px-6 py-3.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-sm border border-slate-700 flex items-center justify-center space-x-2 transition-all"
+              onClick={() => {
+                setIsGameStarted(false);
+                setTeamName('');
+                setParticipantName('');
+                if (typeof window !== 'undefined') {
+                  sessionStorage.removeItem('binaries_game_started');
+                }
+              }}
+              className="w-full sm:w-auto px-6 py-3.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-sm border border-slate-700 flex items-center justify-center space-x-2 transition-all cursor-pointer"
             >
-              <RefreshCw className="w-4 h-4" />
-              <span>Reload Game</span>
+              <Users className="w-4 h-4 text-cyan-400" />
+              <span>New Team Quiz</span>
             </button>
           </div>
         </div>
@@ -276,8 +387,8 @@ export default function GameScreen({ onNavigateToWinners }: GameScreenProps) {
   // Loading State
   if (loading && !currentQuestion) {
     return (
-      <div className="max-w-4xl mx-auto px-4 py-20 flex flex-col items-center justify-center">
-        <div className="w-16 h-16 rounded-2xl border-2 border-cyan-400 border-t-transparent animate-spin mb-4" />
+      <div className="max-w-4xl mx-auto px-4 py-24 flex flex-col items-center justify-center text-center">
+        <div className="w-16 h-16 rounded-3xl border-3 border-cyan-400 border-t-transparent animate-spin mb-4 shadow-lg shadow-cyan-500/20" />
         <p className="text-cyan-400 font-mono text-sm tracking-wider uppercase font-bold animate-pulse">
           Synchronizing Live Symposium Question...
         </p>
@@ -295,22 +406,34 @@ export default function GameScreen({ onNavigateToWinners }: GameScreenProps) {
           <p className="text-slate-300 text-sm mb-6">
             {error || 'No active question found for this round. Please check the Admin dashboard.'}
           </p>
-          <button
-            onClick={fetchCurrentQuestion}
-            className="px-6 py-2.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-bold shadow-lg transition-all"
-          >
-            Retry Connection
-          </button>
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+            <button
+              onClick={fetchCurrentQuestion}
+              className="px-6 py-2.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-bold shadow-lg transition-all cursor-pointer"
+            >
+              Retry Connection
+            </button>
+            <button
+              onClick={handleExitSession}
+              className="px-6 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-bold transition-all cursor-pointer"
+            >
+              Return to Team Entry
+            </button>
+          </div>
         </div>
       </div>
     );
   }
 
   const questionIndex = (currentQuestion.current_question_index ?? 0) + 1;
-  const totalQuestionsInRound = currentQuestion.total_questions_in_round ?? 5;
+  const totalQuestionsInRound = currentQuestion.total_questions_in_round ?? questionsPerRound;
 
+  // -------------------------------------------------------------
+  // FLOW 3: ACTIVE QUIZ SCREEN
+  // Centered Quiz Layout: Timer -> Scientist Card (Large) -> Question -> 5 Options -> Submit
+  // -------------------------------------------------------------
   return (
-    <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6 pb-24 space-y-6">
+    <div className="max-w-4xl mx-auto px-4 sm:px-6 py-6 pb-24 space-y-6">
       {/* Modals */}
       <InstructionsModal
         isOpen={showInstructions}
@@ -323,20 +446,26 @@ export default function GameScreen({ onNavigateToWinners }: GameScreenProps) {
         components={componentsList}
       />
 
-      {/* Top Header Stats & Controls Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-900/70 border border-slate-800/80 p-3.5 sm:p-4 rounded-2xl backdrop-blur-md">
-        {/* Round & Question Indicator */}
-        <div className="flex items-center space-x-3">
+      {/* Top Header Bar: Team Info + Round Progress + Score + Controls */}
+      <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-900/80 border border-slate-800/90 p-3 sm:p-4 rounded-2xl backdrop-blur-md shadow-md">
+        {/* Team & Round Indicator */}
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+          <div className="flex items-center space-x-1.5 px-3 py-1 rounded-xl bg-slate-800/90 border border-slate-700 text-xs font-bold text-slate-200">
+            <Users className="w-3.5 h-3.5 text-cyan-400" />
+            <span className="font-mono text-cyan-300">{teamName}</span>
+          </div>
+
           <div className="px-3 py-1 rounded-xl bg-cyan-950/80 border border-cyan-500/30 text-cyan-400 font-mono font-bold text-xs sm:text-sm">
             ROUND {currentRound}
           </div>
+
           <div className="text-xs sm:text-sm font-semibold text-slate-300">
             Question <span className="text-white font-mono font-bold">{questionIndex}</span> / {totalQuestionsInRound}
           </div>
         </div>
 
-        {/* Score & Streak */}
-        <div className="flex items-center space-x-3">
+        {/* Score, Streak & Controls */}
+        <div className="flex items-center space-x-2 sm:space-x-3">
           <div className="flex items-center space-x-1.5 px-3 py-1 rounded-xl bg-slate-800 border border-slate-700 text-xs font-mono font-bold text-slate-200">
             <Award className="w-3.5 h-3.5 text-cyan-400" />
             <span>{score} PTS</span>
@@ -360,106 +489,106 @@ export default function GameScreen({ onNavigateToWinners }: GameScreenProps) {
 
           <button
             onClick={() => setShowComponentsModal(true)}
-            className="flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-cyan-300 border border-slate-700 text-xs font-semibold transition-colors"
+            className="hidden sm:flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-cyan-300 border border-slate-700 text-xs font-semibold transition-colors"
             title="Components Reference"
           >
             <Cpu className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Reference</span>
+            <span>Reference</span>
+          </button>
+
+          {/* Change Team Button */}
+          <button
+            onClick={handleExitSession}
+            className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-rose-400 hover:bg-slate-700 transition-colors"
+            title="Change Team / Exit"
+          >
+            <LogOut className="w-4 h-4" />
           </button>
         </div>
       </div>
 
-      {/* Main Game Arena: Scientist Card + Timer + Question + 5 Options */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* Left / Top (Main Questions & Scientist) */}
-        <div className="lg:col-span-9 space-y-6">
-          {/* 1. SCIENTIST CARD (PROMINENT AT TOP) */}
-          <ScientistCard scientist={currentQuestion.scientist} />
-
-          {/* 2. QUESTION & 5 OPTIONS */}
-          <QuestionCard
-            questionText={currentQuestion.question_text}
-            options={currentQuestion.options}
-            selectedOption={selectedOption}
-            onSelectOption={handleSelectOption}
-            isSubmitted={isSubmitted}
-            isCorrect={submissionResult?.is_correct}
-            correctOption={submissionResult?.correct_option}
-            disabled={isTimeUp || isSubmitting}
-          />
+      {/* 1. CENTERED COUNTDOWN TIMER (VISUALLY PROMINENT FOR SYMPOSIUM PROJECTORS) */}
+      <div className="flex flex-col items-center justify-center py-2">
+        <div className="text-[11px] font-mono font-bold uppercase tracking-widest text-slate-400 mb-2">
+          REMAINING TIME
         </div>
+        <Timer
+          duration={timerDuration}
+          onTimeUp={handleTimeUp}
+          isPaused={isSubmitted}
+          questionKey={currentQuestion.id}
+        />
+        {isTimeUp && !isSubmitted && (
+          <p className="mt-2 text-xs font-bold text-rose-400 animate-pulse">
+            Time expired! Option locked.
+          </p>
+        )}
+      </div>
 
-        {/* Right / Sidebar: Countdown Timer & Controls */}
-        <div className="lg:col-span-3 space-y-5">
-          {/* Timer Card */}
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/80 p-5 flex flex-col items-center justify-center text-center shadow-lg backdrop-blur-md">
-            <span className="text-xs font-mono uppercase tracking-wider text-slate-400 mb-3">
-              Remaining Time
-            </span>
-            <Timer
-              duration={timerDuration}
-              onTimeUp={handleTimeUp}
-              isPaused={isSubmitted}
-              questionKey={currentQuestion.id}
-            />
-            {isTimeUp && !isSubmitted && (
-              <p className="mt-3 text-xs font-bold text-rose-400 animate-pulse">
-                Time expired! Locked.
-              </p>
-            )}
+      {/* 2. SCIENTIST CARD (PROMINENT LARGE CENTERED IMAGE APPROX 320PX) */}
+      <ScientistCard scientist={currentQuestion.scientist} />
+
+      {/* 3. INVENTION QUESTION & EXACTLY 5 ANSWER OPTIONS */}
+      <QuestionCard
+        questionText={currentQuestion.question_text}
+        options={currentQuestion.options}
+        selectedOption={selectedOption}
+        onSelectOption={handleSelectOption}
+        isSubmitted={isSubmitted}
+        isCorrect={submissionResult?.is_correct}
+        correctOption={submissionResult?.correct_option}
+        disabled={isTimeUp || isSubmitting}
+      />
+
+      {/* 4. SUBMIT / NEXT ACTION BUTTON & FEEDBACK BANNER */}
+      <div className="space-y-4 pt-2">
+        {!isSubmitted ? (
+          <button
+            onClick={handleSubmitAnswer}
+            disabled={!selectedOption || isSubmitting || isTimeUp}
+            className={`w-full py-4 px-6 rounded-2xl font-black text-base sm:text-lg flex items-center justify-center space-x-2.5 shadow-xl transition-all ${
+              selectedOption && !isTimeUp
+                ? 'bg-gradient-to-r from-cyan-500 via-sky-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white shadow-cyan-500/30 cursor-pointer active:scale-98'
+                : 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700/50'
+            }`}
+          >
+            <Send className="w-5 h-5" />
+            <span>{isSubmitting ? 'Evaluating Live Server Answer...' : 'SUBMIT ANSWER'}</span>
+          </button>
+        ) : (
+          <button
+            onClick={handleNextQuestion}
+            className="w-full py-4 px-6 rounded-2xl font-black text-base sm:text-lg flex items-center justify-center space-x-2 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 hover:from-indigo-400 hover:to-pink-400 text-white shadow-xl shadow-indigo-500/30 cursor-pointer transition-all active:scale-98"
+          >
+            <span>NEXT QUESTION</span>
+            <ChevronRight className="w-5 h-5" />
+          </button>
+        )}
+
+        {/* Answer Feedback Banner (reveals correct option strictly after server evaluation) */}
+        {isSubmitted && submissionResult && (
+          <div
+            className={`p-5 rounded-2xl border text-sm sm:text-base font-medium transition-all shadow-lg ${
+              submissionResult.is_correct
+                ? 'bg-emerald-950/70 border-emerald-500/50 text-emerald-200 shadow-emerald-500/10'
+                : 'bg-rose-950/70 border-rose-500/50 text-rose-200 shadow-rose-500/10'
+            }`}
+          >
+            <div className="flex items-center space-x-2.5 mb-1.5">
+              {submissionResult.is_correct ? (
+                <CheckCircle2 className="w-6 h-6 text-emerald-400 shrink-0" />
+              ) : (
+                <XCircle className="w-6 h-6 text-rose-400 shrink-0" />
+              )}
+              <span className="font-bold text-lg">
+                {submissionResult.is_correct ? 'Correct! (+100 PTS)' : 'Incorrect!'}
+              </span>
+            </div>
+            <p className="text-xs sm:text-sm opacity-90 pl-8">
+              Correct Answer was <span className="font-bold font-mono text-white underline decoration-cyan-400">Option {submissionResult.correct_option}</span>.
+            </p>
           </div>
-
-          {/* Action Button: Submit or Next */}
-          <div className="space-y-3">
-            {!isSubmitted ? (
-              <button
-                onClick={handleSubmitAnswer}
-                disabled={!selectedOption || isSubmitting || isTimeUp}
-                className={`w-full py-4 px-5 rounded-2xl font-bold text-base flex items-center justify-center space-x-2 shadow-lg transition-all ${
-                  selectedOption && !isTimeUp
-                    ? 'bg-gradient-to-r from-cyan-500 via-sky-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white shadow-cyan-500/25 cursor-pointer active:scale-98'
-                    : 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700/50'
-                }`}
-              >
-                <Send className="w-5 h-5" />
-                <span>{isSubmitting ? 'Evaluating...' : 'Submit Answer'}</span>
-              </button>
-            ) : (
-              <button
-                onClick={handleNextQuestion}
-                className="w-full py-4 px-5 rounded-2xl font-bold text-base flex items-center justify-center space-x-2 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 hover:from-indigo-400 hover:to-pink-400 text-white shadow-lg shadow-indigo-500/25 cursor-pointer transition-all active:scale-98"
-              >
-                <span>Next Question</span>
-                <ChevronRight className="w-5 h-5" />
-              </button>
-            )}
-
-            {/* Answer Feedback Banner */}
-            {isSubmitted && submissionResult && (
-              <div
-                className={`p-4 rounded-2xl border text-sm font-medium ${
-                  submissionResult.is_correct
-                    ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-200'
-                    : 'bg-rose-950/60 border-rose-500/40 text-rose-200'
-                }`}
-              >
-                <div className="flex items-center space-x-2 mb-1">
-                  {submissionResult.is_correct ? (
-                    <CheckCircle2 className="w-5 h-5 text-emerald-400" />
-                  ) : (
-                    <XCircle className="w-5 h-5 text-rose-400" />
-                  )}
-                  <span className="font-bold text-base">
-                    {submissionResult.is_correct ? 'Correct! (+100 PTS)' : 'Incorrect!'}
-                  </span>
-                </div>
-                <p className="text-xs opacity-90">
-                  Correct Answer was <span className="font-bold font-mono">Option {submissionResult.correct_option}</span>.
-                </p>
-              </div>
-            )}
-          </div>
-        </div>
+        )}
       </div>
     </div>
   );

@@ -5,7 +5,7 @@ export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    const components = getComponents().filter((c) => c.active);
+    const components = (await getComponents()).filter((c) => c.active);
     return NextResponse.json({
       success: true,
       data: components,

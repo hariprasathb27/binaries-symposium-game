@@ -5,8 +5,8 @@ export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    const settings = getGameSettings();
-    const currentQuestion = getCurrentPublicQuestion();
+    const settings = await getGameSettings();
+    const currentQuestion = await getCurrentPublicQuestion();
 
     if (!currentQuestion) {
       return NextResponse.json({

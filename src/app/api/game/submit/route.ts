@@ -34,14 +34,14 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const result = verifyAnswer(
+    const result = await verifyAnswer(
       question_id,
       selected_option,
       participant_id || 'participant_anonymous',
       submission_token
     );
 
-    const settings = getGameSettings();
+    const settings = await getGameSettings();
 
     return NextResponse.json({
       success: true,

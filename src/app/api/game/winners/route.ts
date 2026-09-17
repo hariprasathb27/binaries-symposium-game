@@ -5,7 +5,7 @@ export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    const winners = getWinners();
+    const winners = await getWinners();
     return NextResponse.json({
       success: true,
       data: winners,

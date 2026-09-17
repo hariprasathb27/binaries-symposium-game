@@ -10,7 +10,7 @@ export async function GET() {
     return NextResponse.json({ success: false, message: 'Unauthorized' }, { status: 401 });
   }
 
-  const settings = getGameSettings();
+  const settings = await getGameSettings();
   return NextResponse.json({ success: true, data: settings });
 }
 
@@ -22,8 +22,8 @@ export async function PUT(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const updated = updateGameSettings(body);
-    logAudit('SETTINGS_UPDATED', `Game settings updated by ${session.email}: ${JSON.stringify(body)}`);
+    const updated = await updateGameSettings(body);
+    await logAudit('SETTINGS_UPDATED', `Game settings updated by ${session.email}: ${JSON.stringify(body)}`);
 
     return NextResponse.json({
       success: true,

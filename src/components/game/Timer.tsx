@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState, useRef } from 'react';
-import { Clock, AlertTriangle } from 'lucide-react';
+import { AlertTriangle } from 'lucide-react';
 import { soundManager } from '@/lib/sound';
 
 interface TimerProps {
@@ -58,28 +58,28 @@ export default function Timer({
 
   // Color dynamics
   let colorClass = 'text-cyan-400 stroke-cyan-400';
-  let bgGlow = 'rgba(6, 182, 212, 0.15)';
+  let bgGlow = 'rgba(6, 182, 212, 0.2)';
   let isUrgent = false;
 
   if (timeLeft === 0) {
     colorClass = 'text-rose-500 stroke-rose-500';
-    bgGlow = 'rgba(244, 63, 94, 0.25)';
+    bgGlow = 'rgba(244, 63, 94, 0.3)';
   } else if (timeLeft <= 3) {
     colorClass = 'text-red-500 stroke-red-500 animate-pulse';
-    bgGlow = 'rgba(239, 68, 68, 0.25)';
+    bgGlow = 'rgba(239, 68, 68, 0.35)';
     isUrgent = true;
   } else if (timeLeft <= 5) {
     colorClass = 'text-amber-400 stroke-amber-400';
-    bgGlow = 'rgba(245, 158, 11, 0.2)';
+    bgGlow = 'rgba(245, 158, 11, 0.25)';
   }
 
   return (
     <div className="flex flex-col items-center">
       <div
-        className="relative flex items-center justify-center w-24 h-24 sm:w-28 sm:h-28 rounded-full transition-all duration-300"
+        className="relative flex items-center justify-center w-28 h-28 sm:w-32 sm:h-32 rounded-full transition-all duration-300"
         style={{
-          boxShadow: `0 0 25px ${bgGlow}`,
-          background: 'radial-gradient(circle, rgba(15,23,42,0.95) 0%, rgba(7,11,23,0.85) 100%)',
+          boxShadow: `0 0 30px ${bgGlow}`,
+          background: 'radial-gradient(circle, rgba(15,23,42,0.98) 0%, rgba(7,11,23,0.92) 100%)',
         }}
       >
         {/* SVG Circular Progress Track */}
@@ -115,10 +115,10 @@ export default function Timer({
             </div>
           ) : (
             <>
-              <span className={`text-2xl sm:text-3xl font-black font-mono tracking-tight ${colorClass}`}>
+              <span className={`text-3xl sm:text-4xl font-black font-mono tracking-tight ${colorClass}`}>
                 {timeLeft}
               </span>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 -mt-1">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 -mt-1 font-mono">
                 SEC
               </span>
             </>
@@ -126,8 +126,8 @@ export default function Timer({
         </div>
 
         {isUrgent && (
-          <div className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-rose-500 text-white flex items-center justify-center animate-ping">
-            <AlertTriangle className="w-3 h-3" />
+          <div className="absolute -top-1 -right-1 w-6 h-6 rounded-full bg-rose-500 text-white flex items-center justify-center shadow-lg shadow-rose-500/50 animate-bounce">
+            <AlertTriangle className="w-3.5 h-3.5" />
           </div>
         )}
       </div>

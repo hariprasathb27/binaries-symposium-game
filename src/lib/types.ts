@@ -89,6 +89,7 @@ export interface AdminUser {
   id: string;
   email: string;
   password_hash: string;
+  salt: string;
   role: 'admin' | 'superadmin';
   created_at?: string;
   last_login?: string;

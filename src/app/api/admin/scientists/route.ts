@@ -10,7 +10,7 @@ export async function GET() {
     return NextResponse.json({ success: false, message: 'Unauthorized' }, { status: 401 });
   }
 
-  const scientists = getScientists();
+  const scientists = await getScientists();
   return NextResponse.json({ success: true, data: scientists });
 }
 
@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const scientist = createScientist({
+    const scientist = await createScientist({
       name: name.trim(),
       image_url: image_url?.trim() || 'https://images.unsplash.com/photo-1579783902614-a3fb3927b675?auto=format&fit=crop&w=600&q=80',
       description: description.trim(),
@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
       year: year?.trim() || 'Modern Era',
     });
 
-    logAudit('SCIENTIST_CREATED', `Scientist created: ${scientist.name} (${scientist.id}) by ${session.email}`);
+    await logAudit('SCIENTIST_CREATED', `Scientist created: ${scientist.name} (${scientist.id}) by ${session.email}`);
 
     return NextResponse.json({
       success: true,
@@ -69,12 +69,12 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ success: false, message: 'Scientist ID is required.' }, { status: 400 });
     }
 
-    const updated = updateScientist(id, data);
+    const updated = await updateScientist(id, data);
     if (!updated) {
       return NextResponse.json({ success: false, message: 'Scientist not found.' }, { status: 404 });
     }
 
-    logAudit('SCIENTIST_UPDATED', `Scientist updated: ${id} by ${session.email}`);
+    await logAudit('SCIENTIST_UPDATED', `Scientist updated: ${id} by ${session.email}`);
 
     return NextResponse.json({
       success: true,
@@ -103,12 +103,12 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ success: false, message: 'Scientist ID is required' }, { status: 400 });
     }
 
-    const deleted = deleteScientist(id);
+    const deleted = await deleteScientist(id);
     if (!deleted) {
       return NextResponse.json({ success: false, message: 'Scientist not found' }, { status: 404 });
     }
 
-    logAudit('SCIENTIST_DELETED', `Scientist deleted: ${id} by ${session.email}`);
+    await logAudit('SCIENTIST_DELETED', `Scientist deleted: ${id} by ${session.email}`);
 
     return NextResponse.json({
       success: true,

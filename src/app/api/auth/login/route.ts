@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getDb, logAudit } from '@/lib/db';
+import { getAdminUserByEmail, updateAdminLastLogin, logAudit } from '@/lib/db';
 import { verifyPassword, createSessionToken, SESSION_COOKIE_NAME, ensureDefaultAdmin } from '@/lib/auth';
 import { checkRateLimit } from '@/lib/rate-limit';
 
@@ -16,7 +16,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    ensureDefaultAdmin();
+    await ensureDefaultAdmin();
 
     const body = await req.json();
     const { email, password, securityCode } = body;
@@ -30,7 +30,7 @@ export async function POST(req: NextRequest) {
         role: 'admin',
       });
 
-      logAudit('ADMIN_LOGIN_SECURITY_CODE', 'Admin logged in via security code');
+      await logAudit('ADMIN_LOGIN_SECURITY_CODE', 'Admin logged in via security code');
 
       const res = NextResponse.json({
         success: true,
@@ -56,11 +56,10 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const db = getDb();
-    const user = db.prepare('SELECT * FROM admin_users WHERE email = ?').get(email) as any;
+    const user = await getAdminUserByEmail(email);
 
     if (!user) {
-      logAudit('LOGIN_FAILED', `Failed login attempt for email: ${email}`);
+      await logAudit('LOGIN_FAILED', `Failed login attempt for email: ${email}`);
       return NextResponse.json(
         { success: false, message: 'Invalid credentials' },
         { status: 401 }
@@ -69,7 +68,7 @@ export async function POST(req: NextRequest) {
 
     const isValid = verifyPassword(password, user.password_hash, user.salt);
     if (!isValid) {
-      logAudit('LOGIN_FAILED', `Invalid password for email: ${email}`);
+      await logAudit('LOGIN_FAILED', `Invalid password for email: ${email}`);
       return NextResponse.json(
         { success: false, message: 'Invalid credentials' },
         { status: 401 }
@@ -77,8 +76,8 @@ export async function POST(req: NextRequest) {
     }
 
     // Update last login
-    db.prepare('UPDATE admin_users SET last_login = ? WHERE id = ?').run(new Date().toISOString(), user.id);
-    logAudit('ADMIN_LOGIN_SUCCESS', `Admin logged in: ${email}`);
+    await updateAdminLastLogin(user.id);
+    await logAudit('ADMIN_LOGIN_SUCCESS', `Admin logged in: ${email}`);
 
     const token = await createSessionToken({
       id: user.id,
