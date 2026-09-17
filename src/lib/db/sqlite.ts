@@ -505,11 +505,88 @@ export function shuffleQuestions(mode: 'all' | 'round', roundNumber?: number): Q
   return mode === 'round' && roundNumber !== undefined ? getQuestions(roundNumber) : getQuestions();
 }
 
+/**
+ * Helper to extract or format a user-friendly team name.
+ */
+export function formatTeamName(participantId: string, explicitTeamName?: string): string {
+  if (explicitTeamName && explicitTeamName.trim()) {
+    return explicitTeamName.trim();
+  }
+  if (!participantId || participantId === 'participant_anonymous' || participantId === 'participant') {
+    return 'Symposium Team';
+  }
+  let clean = participantId;
+  if (clean.startsWith('team_')) {
+    clean = clean.substring(5);
+  }
+  return clean
+    .split('_')
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(' ');
+}
+
+/**
+ * Calculates total cumulative score and elapsed completion time for a participant
+ * and inserts/updates their record in the winners SQLite table.
+ */
+export function recordParticipantScore(
+  participantId: string,
+  explicitTeamName?: string,
+  explicitParticipantName?: string
+): Winner | null {
+  const db = getDb();
+  const row = (db.prepare(`
+    SELECT SUM(CASE WHEN is_correct = 1 THEN 100 ELSE 0 END) as total_score,
+           MIN(submitted_at) as earliest_time,
+           MAX(submitted_at) as latest_time
+    FROM submissions
+    WHERE participant_id = ?
+  `) as any).get(participantId) as any;
+
+  if (!row) return null;
+
+  const totalScore = Number(row.total_score || 0);
+  const now = new Date().toISOString();
+
+  let compTime = '02:00';
+  if (row.earliest_time && row.latest_time) {
+    const t1 = new Date(row.earliest_time).getTime();
+    const t2 = new Date(row.latest_time).getTime();
+    if (!isNaN(t1) && !isNaN(t2) && t2 > t1) {
+      const elapsed = Math.max(1, Math.round((t2 - t1) / 1000));
+      compTime = `${String(Math.floor(elapsed / 60)).padStart(2, '0')}:${String(elapsed % 60).padStart(2, '0')}`;
+    }
+  }
+
+  const teamName = formatTeamName(participantId, explicitTeamName);
+  const participantName = explicitParticipantName || 'Symposium Participant';
+  const winnerId = `win_${participantId.replace(/[^a-zA-Z0-9_]/g, '')}`;
+
+  const existing = (db.prepare('SELECT id FROM winners WHERE id = ?') as any).get(winnerId);
+  if (existing) {
+    (db.prepare(`
+      UPDATE winners SET score = ?, completion_time = ?, updated_at = ?
+      WHERE id = ?
+    `) as any).run(totalScore, compTime, now, winnerId);
+  } else {
+    (db.prepare(`
+      INSERT INTO winners (id, position, team_name, participant_name, score, completion_time, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `) as any).run(winnerId, 999, teamName, participantName, totalScore, compTime, now, now);
+  }
+
+  syncWinnersPodium();
+  return (db.prepare('SELECT * FROM winners WHERE id = ?') as any).get(winnerId) as any;
+}
+
 export function verifyAnswer(
   questionId: string,
   selectedOption: OptionKey,
   participantId: string = 'participant',
-  submissionToken?: string
+  submissionToken?: string,
+  explicitTeamName?: string,
+  explicitParticipantName?: string
 ): SubmitAnswerResponse {
   const db = getDb();
   const question = getQuestionById(questionId);
@@ -549,6 +626,15 @@ export function verifyAnswer(
     now,
     submissionToken || submissionId
   );
+
+  // Synchronize score to winners
+  if (participantId && participantId !== 'participant_anonymous' && participantId !== 'participant') {
+    try {
+      recordParticipantScore(participantId, explicitTeamName, explicitParticipantName);
+    } catch (err) {
+      console.error('Error recording participant score in SQLite:', err);
+    }
+  }
 
   return {
     success: true,
@@ -637,10 +723,14 @@ export function shuffleComponents(): ComponentItem[] {
 // -------------------------------------------------------------
 // WINNERS REPOSITORY (SQLITE)
 // -------------------------------------------------------------
-export function getWinners(): Winner[] {
+/**
+ * Dynamically synchronizes and re-ranks all winners in SQLite by score descending
+ * and updates their positions so positions 1, 2, 3... strictly reflect the top scores.
+ */
+export function syncWinnersPodium(): Winner[] {
   const db = getDb();
-  const rows = (db.prepare('SELECT * FROM winners ORDER BY position ASC, score DESC') as any).all() as any[];
-  return rows.map((r) => ({
+  const rows = (db.prepare('SELECT * FROM winners') as any).all() as any[];
+  const winnersList: Winner[] = rows.map((r) => ({
     id: r.id,
     position: Number(r.position),
     team_name: r.team_name,
@@ -650,6 +740,90 @@ export function getWinners(): Winner[] {
     created_at: r.created_at,
     updated_at: r.updated_at,
   }));
+
+  // Ensure any completed or in-progress participant submissions are represented
+  try {
+    const subRows = (db.prepare(`
+      SELECT participant_id,
+             SUM(CASE WHEN is_correct = 1 THEN 100 ELSE 0 END) as total_score,
+             MIN(submitted_at) as earliest_time,
+             MAX(submitted_at) as latest_time
+      FROM submissions
+      WHERE participant_id NOT IN ('participant_anonymous', 'participant')
+      GROUP BY participant_id
+    `) as any).all() as any[];
+
+    const now = new Date().toISOString();
+    for (const sub of subRows) {
+      const pId = sub.participant_id;
+      const winnerId = `win_${pId.replace(/[^a-zA-Z0-9_]/g, '')}`;
+      const formatted = formatTeamName(pId);
+      const existing = winnersList.find(
+        (w) => w.id === winnerId || w.team_name.toLowerCase() === formatted.toLowerCase()
+      );
+      const totalScore = Number(sub.total_score || 0);
+
+      let compTime = '02:00';
+      if (sub.earliest_time && sub.latest_time) {
+        const t1 = new Date(sub.earliest_time).getTime();
+        const t2 = new Date(sub.latest_time).getTime();
+        if (!isNaN(t1) && !isNaN(t2) && t2 > t1) {
+          const elapsed = Math.max(1, Math.round((t2 - t1) / 1000));
+          compTime = `${String(Math.floor(elapsed / 60)).padStart(2, '0')}:${String(elapsed % 60).padStart(2, '0')}`;
+        }
+      }
+
+      if (!existing) {
+        (db.prepare(`
+          INSERT INTO winners (id, position, team_name, participant_name, score, completion_time, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `) as any).run(winnerId, 999, formatted, 'Symposium Participant', totalScore, compTime, now, now);
+        winnersList.push({
+          id: winnerId,
+          position: 999,
+          team_name: formatted,
+          participant_name: 'Symposium Participant',
+          score: totalScore,
+          completion_time: compTime,
+          created_at: now,
+          updated_at: now,
+        });
+      } else if (existing.score < totalScore) {
+        existing.score = totalScore;
+        (db.prepare('UPDATE winners SET score = ?, completion_time = ?, updated_at = ? WHERE id = ?') as any).run(
+          totalScore,
+          compTime,
+          now,
+          existing.id
+        );
+      }
+    }
+  } catch (err) {
+    console.error('Error recovering participant submissions in SQLite:', err);
+  }
+
+  // Sort by score descending (highest score first)
+  winnersList.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    return a.position - b.position;
+  });
+
+  // Assign sequential positions (1, 2, 3...)
+  const updateStmt = db.prepare('UPDATE winners SET position = ?, updated_at = ? WHERE id = ?') as any;
+  const ranked = winnersList.map((w, idx) => {
+    const newPos = idx + 1;
+    if (w.position !== newPos) {
+      updateStmt.run(newPos, new Date().toISOString(), w.id);
+      w.position = newPos;
+    }
+    return w;
+  });
+
+  return ranked;
+}
+
+export function getWinners(): Winner[] {
+  return syncWinnersPodium();
 }
 
 export function createWinner(data: Omit<Winner, 'id' | 'created_at' | 'updated_at'> & { id?: string }): Winner {

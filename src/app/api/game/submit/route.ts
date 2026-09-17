@@ -18,6 +18,8 @@ export async function POST(req: NextRequest) {
 
     const body = await req.json();
     const { question_id, selected_option, participant_id, submission_token } = body;
+    const team_name = body.team_name || (body.teamName as string | undefined);
+    const participant_name = body.participant_name || (body.participantName as string | undefined);
 
     if (!question_id) {
       return NextResponse.json(
@@ -38,7 +40,9 @@ export async function POST(req: NextRequest) {
       question_id,
       selected_option,
       participant_id || 'participant_anonymous',
-      submission_token
+      submission_token,
+      team_name,
+      participant_name
     );
 
     const settings = await getGameSettings();

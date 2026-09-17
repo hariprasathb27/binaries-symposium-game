@@ -470,13 +470,128 @@ export async function shuffleQuestions(mode: 'all' | 'round', roundNumber?: numb
 }
 
 /**
- * Server-side anti-cheat answer verification with idempotency protection.
+ * Helper to extract or format a user-friendly team name.
+ */
+export function formatTeamName(participantId: string, explicitTeamName?: string): string {
+  if (explicitTeamName && explicitTeamName.trim()) {
+    return explicitTeamName.trim();
+  }
+  if (!participantId || participantId === 'participant_anonymous' || participantId === 'participant') {
+    return 'Symposium Team';
+  }
+  let clean = participantId;
+  if (clean.startsWith('team_')) {
+    clean = clean.substring(5);
+  }
+  return clean
+    .split('_')
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(' ');
+}
+
+/**
+ * Calculates total cumulative score and elapsed completion time for a participant
+ * and inserts/updates their record in the winners Firestore collection.
+ */
+export async function recordParticipantScore(
+  participantId: string,
+  explicitTeamName?: string,
+  explicitParticipantName?: string
+): Promise<Winner | null> {
+  const db = getFirestoreDb();
+  const now = new Date().toISOString();
+
+  // Query all submissions for this participant
+  const subsSnap = await db
+    .collection(FIRESTORE_COLLECTIONS.SUBMISSIONS)
+    .where('participant_id', '==', participantId)
+    .get();
+
+  if (subsSnap.empty) {
+    return null;
+  }
+
+  let totalScore = 0;
+  let earliestTime: number | null = null;
+  let latestTime: number | null = null;
+
+  subsSnap.forEach((doc) => {
+    const data = doc.data();
+    if (data.is_correct) {
+      totalScore += data.points !== undefined ? Number(data.points) : 100;
+    }
+    if (data.submitted_at) {
+      const timeMs = new Date(data.submitted_at).getTime();
+      if (!isNaN(timeMs)) {
+        if (earliestTime === null || timeMs < earliestTime) earliestTime = timeMs;
+        if (latestTime === null || timeMs > latestTime) latestTime = timeMs;
+      }
+    }
+  });
+
+  // Calculate elapsed time formatted as MM:SS
+  let completionTime = '02:00';
+  if (earliestTime !== null && latestTime !== null && latestTime > earliestTime) {
+    const elapsedSecs = Math.max(1, Math.round((latestTime - earliestTime) / 1000));
+    const mins = Math.floor(elapsedSecs / 60);
+    const secs = elapsedSecs % 60;
+    completionTime = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  }
+
+  const teamName = formatTeamName(participantId, explicitTeamName);
+  const participantName = explicitParticipantName || 'Symposium Participant';
+
+  // Winner ID deterministically derived from participantId
+  const winnerId = `win_${participantId.replace(/[^a-zA-Z0-9_]/g, '')}`;
+  const winnerRef = db.collection(FIRESTORE_COLLECTIONS.WINNERS).doc(winnerId);
+  const existingDoc = await winnerRef.get();
+
+  let winnerData: Winner;
+  if (existingDoc.exists) {
+    const existing = existingDoc.data()!;
+    winnerData = {
+      id: winnerId,
+      position: Number(existing.position ?? 999),
+      team_name: existing.team_name || teamName,
+      participant_name: existing.participant_name || participantName,
+      score: totalScore,
+      completion_time: completionTime,
+      created_at: existing.created_at || now,
+      updated_at: now,
+    };
+  } else {
+    winnerData = {
+      id: winnerId,
+      position: 999, // Will be dynamically ranked
+      team_name: teamName,
+      participant_name: participantName,
+      score: totalScore,
+      completion_time: completionTime,
+      created_at: now,
+      updated_at: now,
+    };
+  }
+
+  await winnerRef.set(winnerData, { merge: true });
+
+  // Dynamically re-rank podium positions so rankings 1, 2, 3... are strictly accurate
+  await syncWinnersPodium();
+
+  return winnerData;
+}
+
+/**
+ * Server-side anti-cheat answer verification with idempotency protection,
+ * point calculation, submission tracking, and real-time winner podium synchronization.
  */
 export async function verifyAnswer(
   questionId: string,
   selectedOption: OptionKey,
   participantId: string = 'participant',
-  submissionToken?: string
+  submissionToken?: string,
+  explicitTeamName?: string,
+  explicitParticipantName?: string
 ): Promise<SubmitAnswerResponse> {
   const db = getFirestoreDb();
   const question = await getQuestionById(questionId);
@@ -501,25 +616,37 @@ export async function verifyAnswer(
         correct_option: question.correct_option,
         selected_option: existing.selected_option as OptionKey,
         scientist_name: question.scientist?.name || 'Scientist',
-        points_awarded: existing.is_correct ? 100 : 0,
+        points_awarded: existing.points !== undefined ? Number(existing.points) : (existing.is_correct ? 100 : 0),
         already_submitted: true,
       };
     }
   }
 
   const isCorrect = question.correct_option === selectedOption;
+  const pointsAwarded = isCorrect ? 100 : 0;
   const now = new Date().toISOString();
   const submissionId = `sub_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
+  // 1. Record individual submission in Firestore with explicit points field
   await db.collection(FIRESTORE_COLLECTIONS.SUBMISSIONS).doc(submissionId).set({
     id: submissionId,
     question_id: questionId,
     participant_id: participantId,
     selected_option: selectedOption,
     is_correct: isCorrect,
+    points: pointsAwarded,
     submitted_at: now,
     submission_token: submissionToken || submissionId,
   });
+
+  // 2. Track cumulative points and synchronize into WINNERS collection
+  if (participantId && participantId !== 'participant_anonymous' && participantId !== 'participant') {
+    try {
+      await recordParticipantScore(participantId, explicitTeamName, explicitParticipantName);
+    } catch (err) {
+      console.error('Error recording participant score in Firestore:', err);
+    }
+  }
 
   return {
     success: true,
@@ -527,7 +654,7 @@ export async function verifyAnswer(
     correct_option: question.correct_option,
     selected_option: selectedOption,
     scientist_name: question.scientist?.name || 'Scientist',
-    points_awarded: isCorrect ? 100 : 0,
+    points_awarded: pointsAwarded,
     already_submitted: false,
   };
 }
@@ -624,16 +751,20 @@ export async function shuffleComponents(): Promise<ComponentItem[]> {
 // -------------------------------------------------------------
 // WINNERS REPOSITORY (FIRESTORE)
 // -------------------------------------------------------------
-export async function getWinners(): Promise<Winner[]> {
+/**
+ * Dynamically synchronizes and re-ranks all winners in the winners collection by score descending
+ * and updates their positions in Firestore so positions 1, 2, 3... strictly reflect the top scores.
+ */
+export async function syncWinnersPodium(): Promise<Winner[]> {
   const db = getFirestoreDb();
   const snap = await db.collection(FIRESTORE_COLLECTIONS.WINNERS).get();
-  const winners: Winner[] = [];
+  const rawWinners: Winner[] = [];
 
   snap.forEach((doc) => {
     const d = doc.data();
-    winners.push({
+    rawWinners.push({
       id: doc.id,
-      position: Number(d.position ?? 1),
+      position: Number(d.position ?? 999),
       team_name: d.team_name || '',
       participant_name: d.participant_name || '',
       score: Number(d.score ?? 0),
@@ -643,10 +774,103 @@ export async function getWinners(): Promise<Winner[]> {
     });
   });
 
-  return winners.sort((a, b) => {
-    if (a.position !== b.position) return a.position - b.position;
-    return b.score - a.score;
+  // Ensure any completed or in-progress participant submissions are represented
+  try {
+    const submissionsSnap = await db.collection(FIRESTORE_COLLECTIONS.SUBMISSIONS).get();
+    const participantScores = new Map<string, { totalScore: number; earliest: number | null; latest: number | null }>();
+
+    submissionsSnap.forEach((doc) => {
+      const data = doc.data();
+      const pId = data.participant_id;
+      if (pId && pId !== 'participant_anonymous' && pId !== 'participant') {
+        if (!participantScores.has(pId)) {
+          participantScores.set(pId, { totalScore: 0, earliest: null, latest: null });
+        }
+        const record = participantScores.get(pId)!;
+        if (data.is_correct) {
+          record.totalScore += data.points !== undefined ? Number(data.points) : 100;
+        }
+        if (data.submitted_at) {
+          const t = new Date(data.submitted_at).getTime();
+          if (!isNaN(t)) {
+            if (record.earliest === null || t < record.earliest) record.earliest = t;
+            if (record.latest === null || t > record.latest) record.latest = t;
+          }
+        }
+      }
+    });
+
+    const now = new Date().toISOString();
+    for (const [pId, scoreData] of participantScores.entries()) {
+      const winnerId = `win_${pId.replace(/[^a-zA-Z0-9_]/g, '')}`;
+      const formatted = formatTeamName(pId);
+      const existing = rawWinners.find(
+        (w) => w.id === winnerId || w.team_name.toLowerCase() === formatted.toLowerCase()
+      );
+      if (!existing) {
+        let compTime = '02:00';
+        if (scoreData.earliest !== null && scoreData.latest !== null && scoreData.latest > scoreData.earliest) {
+          const elapsed = Math.max(1, Math.round((scoreData.latest - scoreData.earliest) / 1000));
+          compTime = `${String(Math.floor(elapsed / 60)).padStart(2, '0')}:${String(elapsed % 60).padStart(2, '0')}`;
+        }
+        const newWinner: Winner = {
+          id: winnerId,
+          position: 999,
+          team_name: formatted,
+          participant_name: 'Symposium Participant',
+          score: scoreData.totalScore,
+          completion_time: compTime,
+          created_at: now,
+          updated_at: now,
+        };
+        rawWinners.push(newWinner);
+        await db.collection(FIRESTORE_COLLECTIONS.WINNERS).doc(winnerId).set(newWinner, { merge: true });
+      } else if (existing.score < scoreData.totalScore) {
+        existing.score = scoreData.totalScore;
+        await db.collection(FIRESTORE_COLLECTIONS.WINNERS).doc(existing.id).set({
+          score: scoreData.totalScore,
+          updated_at: now,
+        }, { merge: true });
+      }
+    }
+  } catch (err) {
+    console.error('Error recovering participant submissions for podium:', err);
+  }
+
+  // Sort by score descending (highest score first)
+  rawWinners.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    const timeA = new Date(a.updated_at || a.created_at || 0).getTime();
+    const timeB = new Date(b.updated_at || b.created_at || 0).getTime();
+    return timeA - timeB;
   });
+
+  // Assign sequential podium positions (1, 2, 3, ...) and commit in batch
+  const batch = db.batch();
+  let hasBatchUpdates = false;
+
+  const rankedWinners: Winner[] = rawWinners.map((w, idx) => {
+    const newPos = idx + 1;
+    if (w.position !== newPos) {
+      const docRef = db.collection(FIRESTORE_COLLECTIONS.WINNERS).doc(w.id);
+      batch.set(docRef, { position: newPos, updated_at: new Date().toISOString() }, { merge: true });
+      hasBatchUpdates = true;
+    }
+    return {
+      ...w,
+      position: newPos,
+    };
+  });
+
+  if (hasBatchUpdates) {
+    await batch.commit();
+  }
+
+  return rankedWinners;
+}
+
+export async function getWinners(): Promise<Winner[]> {
+  return await syncWinnersPodium();
 }
 
 export async function createWinner(

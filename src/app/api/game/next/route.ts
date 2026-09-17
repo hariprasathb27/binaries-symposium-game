@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getGameSettings, updateGameSettings, getQuestions } from '@/lib/db';
+import { getGameSettings, updateGameSettings, getQuestions, getWinners } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
 
@@ -41,6 +41,12 @@ export async function POST() {
         const updated = await updateGameSettings({
           game_status: 'completed',
         });
+        // Automatically ensure all participant scores and rankings are finalized
+        try {
+          await getWinners();
+        } catch (syncErr) {
+          console.error('Error synchronizing winners on game completion:', syncErr);
+        }
         return NextResponse.json({
           success: true,
           data: updated,

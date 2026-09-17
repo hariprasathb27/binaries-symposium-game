@@ -214,12 +214,28 @@ export async function verifyAnswer(
   question_id: string,
   selected_option: OptionKey,
   participant_id?: string,
-  submission_token?: string
+  submission_token?: string,
+  team_name?: string,
+  participant_name?: string
 ): Promise<SubmitAnswerResponse> {
   if (isFirestoreProvider()) {
-    return firestoreRepo.verifyAnswer(question_id, selected_option, participant_id, submission_token);
+    return firestoreRepo.verifyAnswer(
+      question_id,
+      selected_option,
+      participant_id,
+      submission_token,
+      team_name,
+      participant_name
+    );
   }
-  return getSqlite().verifyAnswer(question_id, selected_option, participant_id, submission_token);
+  return getSqlite().verifyAnswer(
+    question_id,
+    selected_option,
+    participant_id,
+    submission_token,
+    team_name,
+    participant_name
+  );
 }
 
 // -------------------------------------------------------------
@@ -273,6 +289,13 @@ export async function getWinners(): Promise<Winner[]> {
     return firestoreRepo.getWinners();
   }
   return getSqlite().getWinners();
+}
+
+export async function syncWinnersPodium(): Promise<Winner[]> {
+  if (isFirestoreProvider()) {
+    return firestoreRepo.syncWinnersPodium();
+  }
+  return getSqlite().syncWinnersPodium();
 }
 
 export async function createWinner(
