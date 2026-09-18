@@ -13,14 +13,17 @@ export async function GET() {
     const roundQuestions = roundQuestionsRaw.filter((q) => q.active);
     const allQuestions = allQuestionsRaw.filter((q) => q.active);
 
-    return NextResponse.json({
-      success: true,
-      data: {
-        settings,
-        totalQuestionsInRound: roundQuestions.length,
-        totalQuestionsOverall: allQuestions.length,
+    return NextResponse.json(
+      {
+        success: true,
+        data: {
+          settings,
+          totalQuestionsInRound: roundQuestions.length,
+          totalQuestionsOverall: allQuestions.length,
+        },
       },
-    });
+      { headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate' } }
+    );
   } catch (error: any) {
     return NextResponse.json(
       { success: false, message: 'Failed to retrieve game state', error: error.message },

@@ -11,7 +11,10 @@ export async function GET() {
   }
 
   const winners = await getWinners();
-  return NextResponse.json({ success: true, data: winners });
+  return NextResponse.json(
+    { success: true, data: winners },
+    { headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate' } }
+  );
 }
 
 export async function POST(req: NextRequest) {
@@ -41,11 +44,17 @@ export async function POST(req: NextRequest) {
 
     await logAudit('WINNER_CREATED', `Winner created: Position ${winner.position} - ${winner.team_name} by ${session.email}`);
 
-    return NextResponse.json({
-      success: true,
-      message: 'Winner added successfully',
-      data: winner,
-    });
+    return NextResponse.json(
+      {
+        success: true,
+        message: 'Winner added successfully',
+        data: winner,
+      },
+      {
+        status: 201,
+        headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate' },
+      }
+    );
   } catch (err: any) {
     return NextResponse.json(
       { success: false, message: err.message || 'Failed to add winner' },
@@ -75,11 +84,14 @@ export async function PUT(req: NextRequest) {
 
     await logAudit('WINNER_UPDATED', `Winner updated: ${id} by ${session.email}`);
 
-    return NextResponse.json({
-      success: true,
-      message: 'Winner updated successfully',
-      data: updated,
-    });
+    return NextResponse.json(
+      {
+        success: true,
+        message: 'Winner updated successfully',
+        data: updated,
+      },
+      { headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate' } }
+    );
   } catch (err: any) {
     return NextResponse.json(
       { success: false, message: err.message || 'Failed to update winner' },
@@ -96,7 +108,14 @@ export async function DELETE(req: NextRequest) {
 
   try {
     const { searchParams } = new URL(req.url);
-    const id = searchParams.get('id');
+    let id = searchParams.get('id');
+
+    if (!id) {
+      try {
+        const body = await req.json();
+        if (body?.id) id = body.id;
+      } catch {}
+    }
 
     if (!id) {
       return NextResponse.json({ success: false, message: 'Winner ID is required' }, { status: 400 });
@@ -109,10 +128,13 @@ export async function DELETE(req: NextRequest) {
 
     await logAudit('WINNER_DELETED', `Winner deleted: ${id} by ${session.email}`);
 
-    return NextResponse.json({
-      success: true,
-      message: 'Winner deleted successfully',
-    });
+    return NextResponse.json(
+      {
+        success: true,
+        message: 'Winner deleted successfully',
+      },
+      { headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate' } }
+    );
   } catch (err: any) {
     return NextResponse.json(
       { success: false, message: err.message || 'Failed to delete winner' },

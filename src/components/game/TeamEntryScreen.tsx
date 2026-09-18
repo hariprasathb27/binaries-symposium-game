@@ -25,6 +25,37 @@ export default function TeamEntryScreen({
   const [participantName, setParticipantName] = useState<string>('');
   const [touched, setTouched] = useState<boolean>(false);
 
+  const [activeTimerDuration, setActiveTimerDuration] = useState<number>(timerDuration);
+  const [activeTotalRounds, setActiveTotalRounds] = useState<number>(totalRounds);
+  const [activeQuestionsPerRound, setActiveQuestionsPerRound] = useState<number>(questionsPerRound);
+
+  useEffect(() => {
+    setActiveTimerDuration(timerDuration);
+  }, [timerDuration]);
+
+  useEffect(() => {
+    setActiveTotalRounds(totalRounds);
+  }, [totalRounds]);
+
+  useEffect(() => {
+    setActiveQuestionsPerRound(questionsPerRound);
+  }, [questionsPerRound]);
+
+  // Fetch live game settings on mount to ensure fresh timer and rounds display
+  useEffect(() => {
+    fetch('/api/game/state', { cache: 'no-store' })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && data.data?.settings) {
+          const s = data.data.settings;
+          if (s.timer_duration) setActiveTimerDuration(Number(s.timer_duration));
+          if (s.total_rounds) setActiveTotalRounds(Number(s.total_rounds));
+          if (s.questions_per_round) setActiveQuestionsPerRound(Number(s.questions_per_round));
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   // Explicitly wipe all game-related sessionStorage keys on mount to guarantee a 100% clean slate for every new team
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -184,15 +215,15 @@ export default function TeamEntryScreen({
           <div className="pt-2 text-center">
             <div className="flex flex-wrap items-center justify-center gap-2 text-xs font-mono text-cyan-300 font-bold">
               <span className="px-2.5 py-1 rounded-lg bg-slate-800/80 border border-slate-700">
-                {totalRounds} Rounds
+                {activeTotalRounds} Rounds
               </span>
               <span className="text-slate-500">•</span>
               <span className="px-2.5 py-1 rounded-lg bg-slate-800/80 border border-slate-700">
-                {questionsPerRound} Questions / Round
+                {activeQuestionsPerRound} Questions / Round
               </span>
               <span className="text-slate-500">•</span>
               <span className="px-2.5 py-1 rounded-lg bg-slate-800/80 border border-slate-700">
-                {timerDuration} Seconds
+                {activeTimerDuration} Seconds
               </span>
             </div>
 

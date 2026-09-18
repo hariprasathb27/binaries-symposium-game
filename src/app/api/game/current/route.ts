@@ -23,13 +23,36 @@ export async function GET(req: NextRequest) {
       );
 
       if (!question) {
-        return NextResponse.json({
+        return NextResponse.json(
+          {
+            success: true,
+            data: null,
+            message:
+              session.status === 'completed'
+                ? 'Symposium Quiz Completed! Check the Winners tab.'
+                : 'No active question found for the current round.',
+            settings: {
+              event_name: settings.event_name,
+              timer_duration: settings.timer_duration,
+              current_round: session.current_round,
+              current_question_index: session.current_question_index,
+              total_rounds: settings.total_rounds,
+              auto_next: settings.auto_next,
+              answer_reveal: settings.answer_reveal,
+              game_status: session.status,
+            },
+          },
+          { headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate' } }
+        );
+      }
+
+      // ANTI-CHEAT: Ensure correct_option is NOT leaked
+      const { ...safeQuestion } = question;
+
+      return NextResponse.json(
+        {
           success: true,
-          data: null,
-          message:
-            session.status === 'completed'
-              ? 'Symposium Quiz Completed! Check the Winners tab.'
-              : 'No active question found for the current round.',
+          data: safeQuestion,
           settings: {
             event_name: settings.event_name,
             timer_duration: settings.timer_duration,
@@ -40,64 +63,53 @@ export async function GET(req: NextRequest) {
             answer_reveal: settings.answer_reveal,
             game_status: session.status,
           },
-        });
-      }
-
-      // ANTI-CHEAT: Ensure correct_option is NOT leaked
-      const { ...safeQuestion } = question;
-
-      return NextResponse.json({
-        success: true,
-        data: safeQuestion,
-        settings: {
-          event_name: settings.event_name,
-          timer_duration: settings.timer_duration,
-          current_round: session.current_round,
-          current_question_index: session.current_question_index,
-          total_rounds: settings.total_rounds,
-          auto_next: settings.auto_next,
-          answer_reveal: settings.answer_reveal,
-          game_status: session.status,
         },
-      });
+        { headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate' } }
+      );
     }
 
     // 2. Fallback to global settings (projector / admin display)
     const currentQuestion = await getCurrentPublicQuestion();
 
     if (!currentQuestion) {
-      return NextResponse.json({
+      return NextResponse.json(
+        {
+          success: true,
+          data: null,
+          message: 'No active question found for the current round.',
+          settings: {
+            event_name: settings.event_name,
+            timer_duration: settings.timer_duration,
+            current_round: settings.current_round,
+            current_question_index: settings.current_question_index,
+            total_rounds: settings.total_rounds,
+            game_status: settings.game_status,
+          },
+        },
+        { headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate' } }
+      );
+    }
+
+    // ANTI-CHEAT: Ensure correct_option is NOT leaked
+    const { ...safeQuestion } = currentQuestion;
+
+    return NextResponse.json(
+      {
         success: true,
-        data: null,
-        message: 'No active question found for the current round.',
+        data: safeQuestion,
         settings: {
           event_name: settings.event_name,
           timer_duration: settings.timer_duration,
           current_round: settings.current_round,
           current_question_index: settings.current_question_index,
           total_rounds: settings.total_rounds,
+          auto_next: settings.auto_next,
+          answer_reveal: settings.answer_reveal,
           game_status: settings.game_status,
         },
-      });
-    }
-
-    // ANTI-CHEAT: Ensure correct_option is NOT leaked
-    const { ...safeQuestion } = currentQuestion;
-
-    return NextResponse.json({
-      success: true,
-      data: safeQuestion,
-      settings: {
-        event_name: settings.event_name,
-        timer_duration: settings.timer_duration,
-        current_round: settings.current_round,
-        current_question_index: settings.current_question_index,
-        total_rounds: settings.total_rounds,
-        auto_next: settings.auto_next,
-        answer_reveal: settings.answer_reveal,
-        game_status: settings.game_status,
       },
-    });
+      { headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate' } }
+    );
   } catch (error: any) {
     console.error('Error fetching current question:', error);
     return NextResponse.json(

@@ -151,6 +151,15 @@ export async function updateGameSettings(settings: Partial<GameSettings>): Promi
   const updated: GameSettings = {
     ...current,
     ...settings,
+    timer_duration: settings.timer_duration !== undefined ? Number(settings.timer_duration) : current.timer_duration,
+    current_round: settings.current_round !== undefined ? Number(settings.current_round) : current.current_round,
+    current_question_index: settings.current_question_index !== undefined ? Number(settings.current_question_index) : current.current_question_index,
+    total_rounds: settings.total_rounds !== undefined ? Number(settings.total_rounds) : current.total_rounds,
+    questions_per_round: settings.questions_per_round !== undefined ? Number(settings.questions_per_round) : current.questions_per_round,
+    auto_next: settings.auto_next !== undefined ? Boolean(settings.auto_next) : current.auto_next,
+    answer_reveal: settings.answer_reveal !== undefined ? Boolean(settings.answer_reveal) : current.answer_reveal,
+    event_name: settings.event_name !== undefined ? String(settings.event_name).trim() : current.event_name,
+    instructions: settings.instructions !== undefined ? String(settings.instructions) : current.instructions,
     updated_at: now,
   };
 
@@ -159,6 +168,20 @@ export async function updateGameSettings(settings: Partial<GameSettings>): Promi
 }
 
 export async function resetGame(): Promise<GameSettings> {
+  const db = getFirestoreDb();
+
+  // Clear team sessions so all participant devices start fresh at Round 1, Question 0
+  try {
+    const teamSessionsSnap = await db.collection(FIRESTORE_COLLECTIONS.TEAM_SESSIONS).get();
+    if (!teamSessionsSnap.empty) {
+      const batch = db.batch();
+      teamSessionsSnap.forEach((doc) => batch.delete(doc.ref));
+      await batch.commit();
+    }
+  } catch (err) {
+    console.error('Error clearing team sessions on game reset in Firestore:', err);
+  }
+
   return await updateGameSettings({
     current_round: 1,
     current_question_index: 0,
@@ -776,67 +799,8 @@ export async function syncWinnersPodium(): Promise<Winner[]> {
     });
   });
 
-  // Ensure any completed or in-progress participant submissions are represented
-  try {
-    const submissionsSnap = await db.collection(FIRESTORE_COLLECTIONS.SUBMISSIONS).get();
-    const participantScores = new Map<string, { totalScore: number; earliest: number | null; latest: number | null }>();
-
-    submissionsSnap.forEach((doc) => {
-      const data = doc.data();
-      const pId = data.participant_id;
-      if (pId && pId !== 'participant_anonymous' && pId !== 'participant') {
-        if (!participantScores.has(pId)) {
-          participantScores.set(pId, { totalScore: 0, earliest: null, latest: null });
-        }
-        const record = participantScores.get(pId)!;
-        if (data.is_correct) {
-          record.totalScore += data.points !== undefined ? Number(data.points) : 100;
-        }
-        if (data.submitted_at) {
-          const t = new Date(data.submitted_at).getTime();
-          if (!isNaN(t)) {
-            if (record.earliest === null || t < record.earliest) record.earliest = t;
-            if (record.latest === null || t > record.latest) record.latest = t;
-          }
-        }
-      }
-    });
-
-    const now = new Date().toISOString();
-    for (const [pId, scoreData] of participantScores.entries()) {
-      const winnerId = `win_${pId.replace(/[^a-zA-Z0-9_]/g, '')}`;
-      const formatted = formatTeamName(pId);
-      const existing = rawWinners.find(
-        (w) => w.id === winnerId || w.team_name.toLowerCase() === formatted.toLowerCase()
-      );
-      if (!existing) {
-        let compTime = '02:00';
-        if (scoreData.earliest !== null && scoreData.latest !== null && scoreData.latest > scoreData.earliest) {
-          const elapsed = Math.max(1, Math.round((scoreData.latest - scoreData.earliest) / 1000));
-          compTime = `${String(Math.floor(elapsed / 60)).padStart(2, '0')}:${String(elapsed % 60).padStart(2, '0')}`;
-        }
-        const newWinner: Winner = {
-          id: winnerId,
-          position: 999,
-          team_name: formatted,
-          participant_name: 'Symposium Participant',
-          score: scoreData.totalScore,
-          completion_time: compTime,
-          created_at: now,
-          updated_at: now,
-        };
-        rawWinners.push(newWinner);
-        await db.collection(FIRESTORE_COLLECTIONS.WINNERS).doc(winnerId).set(newWinner, { merge: true });
-      } else if (existing.score < scoreData.totalScore) {
-        existing.score = scoreData.totalScore;
-        await db.collection(FIRESTORE_COLLECTIONS.WINNERS).doc(existing.id).set({
-          score: scoreData.totalScore,
-          updated_at: now,
-        }, { merge: true });
-      }
-    }
-  } catch (err) {
-    console.error('Error recovering participant submissions for podium:', err);
+  if (rawWinners.length === 0) {
+    return [];
   }
 
   // Sort by score descending (highest score first)
@@ -883,44 +847,141 @@ export async function createWinner(
   const now = new Date().toISOString();
 
   const winner: Winner = {
-    ...data,
     id,
-    score: data.score || 0,
-    completion_time: data.completion_time || '00:00',
+    position: Number(data.position) || 1,
+    team_name: String(data.team_name || '').trim(),
+    participant_name: String(data.participant_name || '').trim(),
+    score: Number(data.score) || 0,
+    completion_time: String(data.completion_time || '00:00').trim(),
     created_at: now,
     updated_at: now,
   };
 
   await db.collection(FIRESTORE_COLLECTIONS.WINNERS).doc(id).set(winner);
+
+  try {
+    await syncWinnersPodium();
+  } catch (err) {
+    console.error('Error syncing podium after winner creation:', err);
+  }
+
   return winner;
 }
 
 export async function updateWinner(id: string, data: Partial<Winner>): Promise<Winner | null> {
   const db = getFirestoreDb();
-  const docRef = db.collection(FIRESTORE_COLLECTIONS.WINNERS).doc(id);
-  const snap = await docRef.get();
-  if (!snap.exists) return null;
+  let docRef = db.collection(FIRESTORE_COLLECTIONS.WINNERS).doc(id);
+  let snap = await docRef.get();
+
+  if (!snap.exists) {
+    if (id.startsWith('win_')) {
+      const altRef = db.collection(FIRESTORE_COLLECTIONS.WINNERS).doc(id.replace(/^win_/, ''));
+      const altSnap = await altRef.get();
+      if (altSnap.exists) {
+        docRef = altRef;
+        snap = altSnap;
+      } else {
+        return null;
+      }
+    } else {
+      const altRef = db.collection(FIRESTORE_COLLECTIONS.WINNERS).doc(`win_${id}`);
+      const altSnap = await altRef.get();
+      if (altSnap.exists) {
+        docRef = altRef;
+        snap = altSnap;
+      } else {
+        return null;
+      }
+    }
+  }
 
   const current = snap.data()! as Winner;
   const now = new Date().toISOString();
   const updated: Winner = {
     ...current,
-    ...data,
-    id,
+    id: snap.id,
+    position: data.position !== undefined ? Number(data.position) : Number(current.position ?? 1),
+    team_name: data.team_name !== undefined ? String(data.team_name).trim() : current.team_name,
+    participant_name: data.participant_name !== undefined ? String(data.participant_name).trim() : current.participant_name,
+    score: data.score !== undefined ? Number(data.score) : Number(current.score ?? 0),
+    completion_time: data.completion_time !== undefined ? String(data.completion_time).trim() : current.completion_time,
     updated_at: now,
   };
 
   await docRef.set(updated, { merge: true });
+
+  try {
+    await syncWinnersPodium();
+  } catch (err) {
+    console.error('Error syncing podium after winner update:', err);
+  }
+
   return updated;
 }
 
 export async function deleteWinner(id: string): Promise<boolean> {
   const db = getFirestoreDb();
-  const docRef = db.collection(FIRESTORE_COLLECTIONS.WINNERS).doc(id);
-  const snap = await docRef.get();
-  if (!snap.exists) return false;
+  let docRef = db.collection(FIRESTORE_COLLECTIONS.WINNERS).doc(id);
+  let snap = await docRef.get();
+
+  if (!snap.exists) {
+    if (id.startsWith('win_')) {
+      const altRef = db.collection(FIRESTORE_COLLECTIONS.WINNERS).doc(id.replace(/^win_/, ''));
+      const altSnap = await altRef.get();
+      if (altSnap.exists) {
+        docRef = altRef;
+        snap = altSnap;
+      } else {
+        return false;
+      }
+    } else {
+      const altRef = db.collection(FIRESTORE_COLLECTIONS.WINNERS).doc(`win_${id}`);
+      const altSnap = await altRef.get();
+      if (altSnap.exists) {
+        docRef = altRef;
+        snap = altSnap;
+      } else {
+        return false;
+      }
+    }
+  }
 
   await docRef.delete();
+
+  // Also clean up any associated submissions and team sessions so the team cannot be resurrected
+  try {
+    const rawPId = id.replace(/^win_/, '');
+    const pIds = Array.from(new Set([id, rawPId, `team_${rawPId}`, rawPId.replace(/^team_/, '')]));
+
+    for (const pid of pIds) {
+      const subsSnap = await db
+        .collection(FIRESTORE_COLLECTIONS.SUBMISSIONS)
+        .where('participant_id', '==', pid)
+        .get();
+
+      if (!subsSnap.empty) {
+        const batch = db.batch();
+        subsSnap.forEach((d) => batch.delete(d.ref));
+        await batch.commit();
+      }
+
+      const sessionRef = db.collection(FIRESTORE_COLLECTIONS.TEAM_SESSIONS).doc(pid);
+      const sessSnap = await sessionRef.get();
+      if (sessSnap.exists) {
+        await sessionRef.delete();
+      }
+    }
+  } catch (cleanErr) {
+    console.error('Error cleaning up associated submissions for deleted winner:', cleanErr);
+  }
+
+  // Re-sync podium rankings after deletion
+  try {
+    await syncWinnersPodium();
+  } catch (err) {
+    console.error('Error syncing podium after winner deletion:', err);
+  }
+
   return true;
 }
 

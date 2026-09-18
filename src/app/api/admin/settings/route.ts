@@ -11,7 +11,10 @@ export async function GET() {
   }
 
   const settings = await getGameSettings();
-  return NextResponse.json({ success: true, data: settings });
+  return NextResponse.json(
+    { success: true, data: settings },
+    { headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate' } }
+  );
 }
 
 export async function PUT(req: NextRequest) {
@@ -25,15 +28,22 @@ export async function PUT(req: NextRequest) {
     const updated = await updateGameSettings(body);
     await logAudit('SETTINGS_UPDATED', `Game settings updated by ${session.email}: ${JSON.stringify(body)}`);
 
-    return NextResponse.json({
-      success: true,
-      message: 'Settings updated successfully',
-      data: updated,
-    });
+    return NextResponse.json(
+      {
+        success: true,
+        message: 'Settings updated successfully',
+        data: updated,
+      },
+      { headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate' } }
+    );
   } catch (err: any) {
     return NextResponse.json(
       { success: false, message: err.message || 'Failed to update settings' },
       { status: 500 }
     );
   }
+}
+
+export async function POST(req: NextRequest) {
+  return PUT(req);
 }

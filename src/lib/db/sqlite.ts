@@ -156,6 +156,15 @@ export function updateGameSettings(settings: Partial<GameSettings>): GameSetting
   const updated: GameSettings = {
     ...current,
     ...settings,
+    timer_duration: settings.timer_duration !== undefined ? Number(settings.timer_duration) : current.timer_duration,
+    current_round: settings.current_round !== undefined ? Number(settings.current_round) : current.current_round,
+    current_question_index: settings.current_question_index !== undefined ? Number(settings.current_question_index) : current.current_question_index,
+    total_rounds: settings.total_rounds !== undefined ? Number(settings.total_rounds) : current.total_rounds,
+    questions_per_round: settings.questions_per_round !== undefined ? Number(settings.questions_per_round) : current.questions_per_round,
+    auto_next: settings.auto_next !== undefined ? Boolean(settings.auto_next) : current.auto_next,
+    answer_reveal: settings.answer_reveal !== undefined ? Boolean(settings.answer_reveal) : current.answer_reveal,
+    event_name: settings.event_name !== undefined ? String(settings.event_name).trim() : current.event_name,
+    instructions: settings.instructions !== undefined ? String(settings.instructions) : current.instructions,
     updated_at: now,
   };
 
@@ -192,6 +201,13 @@ export function updateGameSettings(settings: Partial<GameSettings>): GameSetting
 }
 
 export function resetGame(): GameSettings {
+  const db = getDb();
+  try {
+    (db.prepare('DELETE FROM team_sessions') as any).run();
+  } catch (err) {
+    console.error('Error clearing team sessions on game reset in SQLite:', err);
+  }
+
   return updateGameSettings({
     current_round: 1,
     current_question_index: 0,
@@ -759,65 +775,8 @@ export function syncWinnersPodium(): Winner[] {
     updated_at: r.updated_at,
   }));
 
-  // Ensure any completed or in-progress participant submissions are represented
-  try {
-    const subRows = (db.prepare(`
-      SELECT participant_id,
-             SUM(CASE WHEN is_correct = 1 THEN 100 ELSE 0 END) as total_score,
-             MIN(submitted_at) as earliest_time,
-             MAX(submitted_at) as latest_time
-      FROM submissions
-      WHERE participant_id NOT IN ('participant_anonymous', 'participant')
-      GROUP BY participant_id
-    `) as any).all() as any[];
-
-    const now = new Date().toISOString();
-    for (const sub of subRows) {
-      const pId = sub.participant_id;
-      const winnerId = `win_${pId.replace(/[^a-zA-Z0-9_]/g, '')}`;
-      const formatted = formatTeamName(pId);
-      const existing = winnersList.find(
-        (w) => w.id === winnerId || w.team_name.toLowerCase() === formatted.toLowerCase()
-      );
-      const totalScore = Number(sub.total_score || 0);
-
-      let compTime = '02:00';
-      if (sub.earliest_time && sub.latest_time) {
-        const t1 = new Date(sub.earliest_time).getTime();
-        const t2 = new Date(sub.latest_time).getTime();
-        if (!isNaN(t1) && !isNaN(t2) && t2 > t1) {
-          const elapsed = Math.max(1, Math.round((t2 - t1) / 1000));
-          compTime = `${String(Math.floor(elapsed / 60)).padStart(2, '0')}:${String(elapsed % 60).padStart(2, '0')}`;
-        }
-      }
-
-      if (!existing) {
-        (db.prepare(`
-          INSERT INTO winners (id, position, team_name, participant_name, score, completion_time, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `) as any).run(winnerId, 999, formatted, 'Symposium Participant', totalScore, compTime, now, now);
-        winnersList.push({
-          id: winnerId,
-          position: 999,
-          team_name: formatted,
-          participant_name: 'Symposium Participant',
-          score: totalScore,
-          completion_time: compTime,
-          created_at: now,
-          updated_at: now,
-        });
-      } else if (existing.score < totalScore) {
-        existing.score = totalScore;
-        (db.prepare('UPDATE winners SET score = ?, completion_time = ?, updated_at = ? WHERE id = ?') as any).run(
-          totalScore,
-          compTime,
-          now,
-          existing.id
-        );
-      }
-    }
-  } catch (err) {
-    console.error('Error recovering participant submissions in SQLite:', err);
+  if (winnersList.length === 0) {
+    return [];
   }
 
   // Sort by score descending (highest score first)
@@ -852,24 +811,51 @@ export function createWinner(data: Omit<Winner, 'id' | 'created_at' | 'updated_a
   (db.prepare(`
     INSERT INTO winners (id, position, team_name, participant_name, score, completion_time, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `) as any).run(id, data.position, data.team_name, data.participant_name, data.score || 0, data.completion_time || '00:00', now, now);
+  `) as any).run(
+    id,
+    Number(data.position) || 1,
+    String(data.team_name || '').trim(),
+    String(data.participant_name || '').trim(),
+    Number(data.score) || 0,
+    String(data.completion_time || '00:00').trim(),
+    now,
+    now
+  );
+
+  try {
+    syncWinnersPodium();
+  } catch (err) {}
 
   return { ...data, id, created_at: now, updated_at: now };
 }
 
 export function updateWinner(id: string, data: Partial<Winner>): Winner | null {
   const db = getDb();
-  const r = (db.prepare('SELECT * FROM winners WHERE id = ?') as any).get(id) as any;
+  let r = (db.prepare('SELECT * FROM winners WHERE id = ?') as any).get(id) as any;
+  let targetId = id;
+
+  if (!r) {
+    if (id.startsWith('win_')) {
+      const altId = id.replace(/^win_/, '');
+      r = (db.prepare('SELECT * FROM winners WHERE id = ?') as any).get(altId) as any;
+      if (r) targetId = altId;
+    } else {
+      const altId = `win_${id}`;
+      r = (db.prepare('SELECT * FROM winners WHERE id = ?') as any).get(altId) as any;
+      if (r) targetId = altId;
+    }
+  }
+
   if (!r) return null;
   const now = new Date().toISOString();
 
   const updated: Winner = {
     id: r.id,
-    position: data.position !== undefined ? data.position : Number(r.position),
-    team_name: data.team_name ?? r.team_name,
-    participant_name: data.participant_name ?? r.participant_name,
-    score: data.score !== undefined ? data.score : Number(r.score),
-    completion_time: data.completion_time ?? r.completion_time,
+    position: data.position !== undefined ? Number(data.position) : Number(r.position),
+    team_name: data.team_name !== undefined ? String(data.team_name).trim() : r.team_name,
+    participant_name: data.participant_name !== undefined ? String(data.participant_name).trim() : r.participant_name,
+    score: data.score !== undefined ? Number(data.score) : Number(r.score),
+    completion_time: data.completion_time !== undefined ? String(data.completion_time).trim() : r.completion_time,
     created_at: r.created_at,
     updated_at: now,
   };
@@ -877,14 +863,39 @@ export function updateWinner(id: string, data: Partial<Winner>): Winner | null {
   (db.prepare(`
     UPDATE winners SET position = ?, team_name = ?, participant_name = ?, score = ?, completion_time = ?, updated_at = ?
     WHERE id = ?
-  `) as any).run(updated.position, updated.team_name, updated.participant_name, updated.score, updated.completion_time, now, id);
+  `) as any).run(updated.position, updated.team_name, updated.participant_name, updated.score, updated.completion_time, now, targetId);
+
+  try {
+    syncWinnersPodium();
+  } catch (err) {}
 
   return updated;
 }
 
 export function deleteWinner(id: string): boolean {
   const db = getDb();
-  const res = (db.prepare('DELETE FROM winners WHERE id = ?') as any).run(id);
+  const rawPId = id.replace(/^win_/, '');
+  const res = (db.prepare('DELETE FROM winners WHERE id = ? OR id = ? OR id = ?') as any).run(
+    id,
+    rawPId,
+    `win_${rawPId}`
+  );
+
+  // Clean up associated submissions and team sessions so the team cannot be resurrected
+  try {
+    const pIds = Array.from(new Set([id, rawPId, `team_${rawPId}`, rawPId.replace(/^team_/, '')]));
+    for (const pid of pIds) {
+      (db.prepare('DELETE FROM submissions WHERE participant_id = ?') as any).run(pid);
+      (db.prepare('DELETE FROM team_sessions WHERE participant_id = ?') as any).run(pid);
+    }
+  } catch (cleanErr) {
+    console.error('Error cleaning submissions in SQLite:', cleanErr);
+  }
+
+  try {
+    syncWinnersPodium();
+  } catch (err) {}
+
   return Number(res.changes) > 0;
 }
 

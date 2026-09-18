@@ -14,11 +14,14 @@ export async function POST() {
     const settings = await resetGame();
     await logAudit('GAME_RESET', `Game state was reset to Round 1, Question 0 by ${session.email}`);
 
-    return NextResponse.json({
-      success: true,
-      message: 'Game state reset successfully to Round 1, Question 1.',
-      data: settings,
-    });
+    return NextResponse.json(
+      {
+        success: true,
+        message: 'Game state reset successfully to Round 1, Question 1.',
+        data: settings,
+      },
+      { headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate' } }
+    );
   } catch (err: any) {
     return NextResponse.json(
       { success: false, message: err.message || 'Failed to reset game' },

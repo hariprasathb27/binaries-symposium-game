@@ -145,10 +145,13 @@ async function runTests() {
     assert(shuffleRes.body.success === true, `Shuffle succeeded`);
 
     // Create New Question (Validation: exactly 5 options)
+    const sciListRes = await request('/api/admin/scientists');
+    const validSciId = sciListRes.body.data?.[0]?.id || 'sci_tesla';
+
     const newQuestionRes = await request('/api/admin/questions', {
       method: 'POST',
       body: {
-        scientist_id: 'sci_tesla',
+        scientist_id: validSciId,
         question_text: 'What experimental device did Tesla construct at Colorado Springs in 1899 to transmit wireless electrical power?',
         option_a: 'Magnifying Transmitter',
         option_b: 'Dynamo-Electric Machine',

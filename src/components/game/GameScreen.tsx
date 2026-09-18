@@ -251,7 +251,7 @@ export default function GameScreen({ onNavigateToWinners }: GameScreenProps) {
 
     // 4. Explicitly initialize fresh team session on server (guaranteeing Round 1, Question 0)
     try {
-      await fetch('/api/game/start', {
+      const startRes = await fetch('/api/game/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -260,6 +260,15 @@ export default function GameScreen({ onNavigateToWinners }: GameScreenProps) {
           participant_name: newParticipant,
         }),
       });
+      const startJson = await startRes.json();
+      if (startJson.success && startJson.data?.settings) {
+        if (startJson.data.settings.timer_duration) {
+          setTimerDuration(Number(startJson.data.settings.timer_duration));
+        }
+        if (startJson.data.settings.total_rounds) {
+          setTotalRounds(Number(startJson.data.settings.total_rounds));
+        }
+      }
     } catch (e) {
       console.error('Error starting team session:', e);
     }
