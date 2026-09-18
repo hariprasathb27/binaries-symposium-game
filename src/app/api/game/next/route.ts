@@ -1,10 +1,45 @@
-import { NextResponse } from 'next/server';
-import { getGameSettings, updateGameSettings, getQuestions, getWinners } from '@/lib/db';
+import { NextRequest, NextResponse } from 'next/server';
+import {
+  getGameSettings,
+  updateGameSettings,
+  getQuestions,
+  getWinners,
+  advanceTeamSession,
+} from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
 
-export async function POST() {
+export async function POST(req: NextRequest) {
   try {
+    let participantId: string | undefined = undefined;
+    let teamName: string | undefined = undefined;
+
+    try {
+      const body = await req.json();
+      if (body) {
+        if (body.participant_id) participantId = body.participant_id;
+        if (body.team_name) teamName = body.team_name;
+      }
+    } catch {
+      // Empty or non-JSON body
+    }
+
+    // 1. Per-team isolated advance
+    if (participantId) {
+      const result = await advanceTeamSession(participantId, teamName);
+      return NextResponse.json({
+        success: true,
+        data: {
+          session: result.session,
+          game_status: result.session.status,
+          current_round: result.session.current_round,
+          current_question_index: result.session.current_question_index,
+        },
+        message: result.message,
+      });
+    }
+
+    // 2. Fallback to global settings advance (admin controls)
     const settings = await getGameSettings();
     const roundQuestions = (await getQuestions(settings.current_round)).filter((q) => q.active);
     const nextIndex = settings.current_question_index + 1;
@@ -61,3 +96,4 @@ export async function POST() {
     );
   }
 }
+

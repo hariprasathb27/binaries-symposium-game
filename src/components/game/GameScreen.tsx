@@ -126,8 +126,14 @@ export default function GameScreen({ onNavigateToWinners }: GameScreenProps) {
     };
   }, []);
 
+  // Helper to derive participant/team session key
+  const getParticipantId = useCallback((overrideTeam?: string) => {
+    const t = overrideTeam !== undefined ? overrideTeam : teamName;
+    return t ? `team_${t.toLowerCase().trim().replace(/[^a-z0-9]/g, '_')}` : 'participant_anonymous';
+  }, [teamName]);
+
   // Fetch current question (strictly only called AFTER game has started)
-  const fetchCurrentQuestion = useCallback(async () => {
+  const fetchCurrentQuestion = useCallback(async (overrideParticipantId?: string, overrideTeam?: string) => {
     try {
       setLoading(true);
       setError(null);
@@ -137,7 +143,11 @@ export default function GameScreen({ onNavigateToWinners }: GameScreenProps) {
       setIsTimeUp(false);
       setSubmissionResult(null);
 
-      const res = await fetch('/api/game/current', { cache: 'no-store' });
+      const pId = overrideParticipantId || getParticipantId(overrideTeam);
+      const tName = overrideTeam !== undefined ? overrideTeam : teamName;
+      const url = `/api/game/current?participant_id=${encodeURIComponent(pId)}&team_name=${encodeURIComponent(tName)}`;
+
+      const res = await fetch(url, { cache: 'no-store' });
       const json = await res.json();
 
       if (!json.success) {
@@ -165,7 +175,7 @@ export default function GameScreen({ onNavigateToWinners }: GameScreenProps) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [getParticipantId, teamName]);
 
   // Fetch game settings and supporting metadata on mount (does NOT start timer or load question)
   useEffect(() => {
@@ -204,7 +214,7 @@ export default function GameScreen({ onNavigateToWinners }: GameScreenProps) {
   }, [isGameStarted, fetchCurrentQuestion]);
 
   // Handle Start Game from Team Entry Screen
-  const handleStartGame = (newTeam: string, newParticipant: string) => {
+  const handleStartGame = async (newTeam: string, newParticipant: string) => {
     // 1. Wipe any leftover timeouts
     if (autoNextTimeoutRef.current) {
       clearTimeout(autoNextTimeoutRef.current);
@@ -228,6 +238,8 @@ export default function GameScreen({ onNavigateToWinners }: GameScreenProps) {
     setParticipantName(newParticipant);
     setIsGameStarted(true);
 
+    const participantId = `team_${newTeam.toLowerCase().trim().replace(/[^a-z0-9]/g, '_')}`;
+
     if (typeof window !== 'undefined') {
       sessionStorage.setItem('binaries_game_started', 'true');
       sessionStorage.setItem('binaries_participant_team', newTeam);
@@ -236,7 +248,23 @@ export default function GameScreen({ onNavigateToWinners }: GameScreenProps) {
     }
 
     soundManager.playClick();
-    fetchCurrentQuestion();
+
+    // 4. Explicitly initialize fresh team session on server (guaranteeing Round 1, Question 0)
+    try {
+      await fetch('/api/game/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          participant_id: participantId,
+          team_name: newTeam,
+          participant_name: newParticipant,
+        }),
+      });
+    } catch (e) {
+      console.error('Error starting team session:', e);
+    }
+
+    fetchCurrentQuestion(participantId, newTeam);
   };
 
   // Handle Leaving / Resetting Team Session
@@ -337,13 +365,18 @@ export default function GameScreen({ onNavigateToWinners }: GameScreenProps) {
 
     try {
       setLoading(true);
+      const participantId = getParticipantId();
       const res = await fetch('/api/game/next', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          participant_id: participantId,
+          team_name: teamName,
+        }),
       });
       const json = await res.json();
 
-      if (json.data?.game_status === 'completed') {
+      if (json.data?.game_status === 'completed' || json.data?.session?.status === 'completed') {
         setGameStatus('completed');
         soundManager.playFanfare();
         return;
@@ -471,7 +504,7 @@ export default function GameScreen({ onNavigateToWinners }: GameScreenProps) {
           </p>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
             <button
-              onClick={fetchCurrentQuestion}
+              onClick={() => fetchCurrentQuestion()}
               className="px-6 py-2.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-bold shadow-lg transition-all cursor-pointer"
             >
               Retry Connection

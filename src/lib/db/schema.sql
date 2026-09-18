@@ -98,8 +98,22 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS team_sessions (
+  id TEXT PRIMARY KEY,
+  team_name TEXT NOT NULL,
+  participant_name TEXT NOT NULL,
+  current_round INTEGER NOT NULL DEFAULT 1,
+  current_question_index INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'active',
+  score INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_questions_round_order ON questions(round_number, question_order, active);
 CREATE INDEX IF NOT EXISTS idx_questions_scientist ON questions(scientist_id);
 CREATE INDEX IF NOT EXISTS idx_winners_position ON winners(position);
 CREATE INDEX IF NOT EXISTS idx_submissions_token ON submissions(submission_token);
+CREATE INDEX IF NOT EXISTS idx_team_sessions_id ON team_sessions(id);
+

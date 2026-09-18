@@ -120,3 +120,16 @@ export interface ApiResponse<T = any> {
   code?: string;
   errors?: Record<string, string>;
 }
+
+export interface TeamSession {
+  id: string; // participant_id (e.g., 'team_alpha')
+  team_name: string;
+  participant_name: string;
+  current_round: number;
+  current_question_index: number;
+  status: 'waiting' | 'active' | 'completed';
+  score?: number;
+  created_at?: string;
+  updated_at?: string;
+}
+

@@ -8,6 +8,7 @@ import {
   AdminUser,
   OptionKey,
   SubmitAnswerResponse,
+  TeamSession,
 } from '../types';
 import * as firestoreRepo from './firestore';
 
@@ -377,3 +378,53 @@ export async function getHealthStatus(): Promise<{
   }
   return getSqlite().getHealthStatus();
 }
+
+// -------------------------------------------------------------
+// TEAM SESSIONS (PER-TEAM ISOLATION)
+// -------------------------------------------------------------
+export async function getTeamSession(participantId: string): Promise<TeamSession | null> {
+  if (isFirestoreProvider()) {
+    return firestoreRepo.getTeamSession(participantId);
+  }
+  return getSqlite().getTeamSession(participantId);
+}
+
+export async function initOrResetTeamSession(
+  participantId: string,
+  teamName?: string,
+  participantName?: string
+): Promise<TeamSession> {
+  if (isFirestoreProvider()) {
+    return firestoreRepo.initOrResetTeamSession(participantId, teamName, participantName);
+  }
+  return getSqlite().initOrResetTeamSession(participantId, teamName, participantName);
+}
+
+export async function resetTeamSession(participantId: string): Promise<TeamSession> {
+  if (isFirestoreProvider()) {
+    return firestoreRepo.resetTeamSession(participantId);
+  }
+  return getSqlite().resetTeamSession(participantId);
+}
+
+export async function getTeamCurrentPublicQuestion(
+  participantId: string,
+  teamName?: string,
+  participantName?: string
+): Promise<{ question: PublicQuestion | null; session: TeamSession; totalInRound: number }> {
+  if (isFirestoreProvider()) {
+    return firestoreRepo.getTeamCurrentPublicQuestion(participantId, teamName, participantName);
+  }
+  return getSqlite().getTeamCurrentPublicQuestion(participantId, teamName, participantName);
+}
+
+export async function advanceTeamSession(
+  participantId: string,
+  teamName?: string
+): Promise<{ session: TeamSession; completed: boolean; advancedRound: boolean; message: string }> {
+  if (isFirestoreProvider()) {
+    return firestoreRepo.advanceTeamSession(participantId, teamName);
+  }
+  return getSqlite().advanceTeamSession(participantId, teamName);
+}
+

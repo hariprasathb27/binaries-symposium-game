@@ -11,6 +11,7 @@ import {
   AdminUser,
   OptionKey,
   SubmitAnswerResponse,
+  TeamSession,
 } from '../types';
 
 let dbInstance: DatabaseSync | null = null;
@@ -61,6 +62,23 @@ function initSchema(db: DatabaseSync): void {
   if (fs.existsSync(schemaPath)) {
     const schemaSql = fs.readFileSync(schemaPath, 'utf8');
     db.exec(schemaSql);
+  }
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS team_sessions (
+        id TEXT PRIMARY KEY,
+        team_name TEXT NOT NULL,
+        participant_name TEXT NOT NULL,
+        current_round INTEGER NOT NULL DEFAULT 1,
+        current_question_index INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'active',
+        score INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `);
+  } catch (e) {
+    // Already created
   }
 }
 
@@ -932,3 +950,225 @@ export function getHealthStatus(): { status: string; timestamp: string; database
     scientistsCount: Number(sCount),
   };
 }
+
+// -------------------------------------------------------------
+// TEAM SESSIONS REPOSITORY (PER-TEAM ISOLATION - SQLITE)
+// -------------------------------------------------------------
+export function getTeamSession(participantId: string): TeamSession | null {
+  const cleanId = (participantId || 'participant_anonymous').trim();
+  const db = getDb();
+  const row = (db.prepare('SELECT * FROM team_sessions WHERE id = ?') as any).get(cleanId) as any;
+  if (!row) return null;
+  return {
+    id: row.id,
+    team_name: row.team_name,
+    participant_name: row.participant_name,
+    current_round: Number(row.current_round ?? 1),
+    current_question_index: Number(row.current_question_index ?? 0),
+    status: row.status || 'active',
+    score: Number(row.score ?? 0),
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+export function initOrResetTeamSession(
+  participantId: string,
+  teamName?: string,
+  participantName?: string
+): TeamSession {
+  const cleanId = (participantId || 'participant_anonymous').trim();
+  const team = formatTeamName(cleanId, teamName);
+  const participant = participantName?.trim() || 'Symposium Participant';
+  const now = new Date().toISOString();
+  const db = getDb();
+
+  const session: TeamSession = {
+    id: cleanId,
+    team_name: team,
+    participant_name: participant,
+    current_round: 1,
+    current_question_index: 0,
+    status: 'active',
+    score: 0,
+    created_at: now,
+    updated_at: now,
+  };
+
+  (db.prepare(`
+    INSERT OR REPLACE INTO team_sessions (
+      id, team_name, participant_name, current_round, current_question_index, status, score, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `) as any).run(
+    session.id,
+    session.team_name,
+    session.participant_name,
+    session.current_round,
+    session.current_question_index,
+    session.status,
+    session.score,
+    session.created_at,
+    session.updated_at
+  );
+
+  return session;
+}
+
+export function resetTeamSession(participantId: string): TeamSession {
+  return initOrResetTeamSession(participantId);
+}
+
+export function getTeamCurrentPublicQuestion(
+  participantId: string,
+  teamName?: string,
+  participantName?: string
+): { question: PublicQuestion | null; session: TeamSession; totalInRound: number } {
+  let session = getTeamSession(participantId);
+  if (!session) {
+    session = initOrResetTeamSession(participantId, teamName, participantName);
+  }
+
+  if (session.status === 'completed') {
+    return { question: null, session, totalInRound: 0 };
+  }
+
+  const settings = getGameSettings();
+  let roundQuestions = getQuestions(session.current_round).filter((q) => q.active);
+
+  if (roundQuestions.length === 0) {
+    roundQuestions = getQuestions().filter((q) => q.active);
+  }
+
+  if (roundQuestions.length === 0) {
+    return { question: null, session, totalInRound: 0 };
+  }
+
+  if (session.current_question_index >= roundQuestions.length) {
+    const nextRound = session.current_round + 1;
+    const nextQuestions = getQuestions(nextRound).filter((q) => q.active);
+
+    if (nextQuestions.length > 0 && nextRound <= settings.total_rounds) {
+      session = {
+        ...session,
+        current_round: nextRound,
+        current_question_index: 0,
+        status: 'active',
+        updated_at: new Date().toISOString(),
+      };
+      const db = getDb();
+      (db.prepare(`
+        UPDATE team_sessions
+        SET current_round = ?, current_question_index = ?, status = ?, updated_at = ?
+        WHERE id = ?
+      `) as any).run(session.current_round, session.current_question_index, session.status, session.updated_at, session.id);
+      roundQuestions = nextQuestions;
+    } else {
+      session = {
+        ...session,
+        status: 'completed',
+        updated_at: new Date().toISOString(),
+      };
+      const db = getDb();
+      (db.prepare(`
+        UPDATE team_sessions
+        SET status = ?, updated_at = ?
+        WHERE id = ?
+      `) as any).run(session.status, session.updated_at, session.id);
+      try {
+        recordParticipantScore(session.id, session.team_name, session.participant_name);
+        syncWinnersPodium();
+      } catch (e) {
+        console.error('Error finalizing score for completed team session:', e);
+      }
+      return { question: null, session, totalInRound: 0 };
+    }
+  }
+
+  const q = roundQuestions[session.current_question_index];
+  const formatted = formatPublicQuestion(q, session.current_question_index, roundQuestions.length);
+  return { question: formatted, session, totalInRound: roundQuestions.length };
+}
+
+export function advanceTeamSession(
+  participantId: string,
+  teamName?: string
+): { session: TeamSession; completed: boolean; advancedRound: boolean; message: string } {
+  let session = getTeamSession(participantId);
+  if (!session) {
+    session = initOrResetTeamSession(participantId, teamName);
+  }
+
+  const settings = getGameSettings();
+  const roundQuestions = getQuestions(session.current_round).filter((q) => q.active);
+  const nextIndex = session.current_question_index + 1;
+  const now = new Date().toISOString();
+  const db = getDb();
+
+  if (nextIndex < roundQuestions.length) {
+    const updatedSession: TeamSession = {
+      ...session,
+      current_question_index: nextIndex,
+      status: 'active',
+      updated_at: now,
+    };
+    (db.prepare(`
+      UPDATE team_sessions
+      SET current_question_index = ?, status = ?, updated_at = ?
+      WHERE id = ?
+    `) as any).run(updatedSession.current_question_index, updatedSession.status, updatedSession.updated_at, updatedSession.id);
+    return {
+      session: updatedSession,
+      completed: false,
+      advancedRound: false,
+      message: `Advanced to Question ${nextIndex + 1}`,
+    };
+  } else {
+    const nextRound = session.current_round + 1;
+    const nextRoundQuestions = getQuestions(nextRound).filter((q) => q.active);
+
+    if (nextRoundQuestions.length > 0 && nextRound <= settings.total_rounds) {
+      const updatedSession: TeamSession = {
+        ...session,
+        current_round: nextRound,
+        current_question_index: 0,
+        status: 'active',
+        updated_at: now,
+      };
+      (db.prepare(`
+        UPDATE team_sessions
+        SET current_round = ?, current_question_index = ?, status = ?, updated_at = ?
+        WHERE id = ?
+      `) as any).run(updatedSession.current_round, updatedSession.current_question_index, updatedSession.status, updatedSession.updated_at, updatedSession.id);
+      return {
+        session: updatedSession,
+        completed: false,
+        advancedRound: true,
+        message: `Advanced to Round ${nextRound}!`,
+      };
+    } else {
+      const updatedSession: TeamSession = {
+        ...session,
+        status: 'completed',
+        updated_at: now,
+      };
+      (db.prepare(`
+        UPDATE team_sessions
+        SET status = ?, updated_at = ?
+        WHERE id = ?
+      `) as any).run(updatedSession.status, updatedSession.updated_at, updatedSession.id);
+      try {
+        recordParticipantScore(session.id, session.team_name, session.participant_name);
+        syncWinnersPodium();
+      } catch (syncErr) {
+        console.error('Error synchronizing winners on team completion:', syncErr);
+      }
+      return {
+        session: updatedSession,
+        completed: true,
+        advancedRound: false,
+        message: 'Symposium Quiz Completed! Check the Winners tab.',
+      };
+    }
+  }
+}
+

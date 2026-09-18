@@ -10,6 +10,7 @@ import {
   AdminUser,
   OptionKey,
   SubmitAnswerResponse,
+  TeamSession,
 } from '../types';
 
 let firestoreInstance: Firestore | null = null;
@@ -23,6 +24,7 @@ export const FIRESTORE_COLLECTIONS = {
   SETTINGS: 'game_settings',
   SUBMISSIONS: 'submissions',
   LOGS: 'audit_logs',
+  TEAM_SESSIONS: 'team_sessions',
 };
 
 function cleanEnvValue(val: string | undefined): string | undefined {
@@ -1005,3 +1007,194 @@ export async function getHealthStatus(): Promise<{
     scientistsCount: sSnap.data().count,
   };
 }
+
+// -------------------------------------------------------------
+// TEAM SESSIONS REPOSITORY (PER-TEAM ISOLATION)
+// -------------------------------------------------------------
+export async function getTeamSession(participantId: string): Promise<TeamSession | null> {
+  const cleanId = (participantId || 'participant_anonymous').trim();
+  const db = getFirestoreDb();
+  const docRef = db.collection(FIRESTORE_COLLECTIONS.TEAM_SESSIONS).doc(cleanId);
+  const snap = await docRef.get();
+
+  if (!snap.exists) return null;
+  const d = snap.data()!;
+  return {
+    id: snap.id,
+    team_name: d.team_name || formatTeamName(cleanId),
+    participant_name: d.participant_name || 'Symposium Participant',
+    current_round: Number(d.current_round ?? 1),
+    current_question_index: Number(d.current_question_index ?? 0),
+    status: d.status || 'active',
+    score: Number(d.score ?? 0),
+    created_at: d.created_at,
+    updated_at: d.updated_at,
+  };
+}
+
+export async function initOrResetTeamSession(
+  participantId: string,
+  teamName?: string,
+  participantName?: string
+): Promise<TeamSession> {
+  const cleanId = (participantId || 'participant_anonymous').trim();
+  const team = formatTeamName(cleanId, teamName);
+  const participant = participantName?.trim() || 'Symposium Participant';
+  const now = new Date().toISOString();
+  const db = getFirestoreDb();
+
+  const session: TeamSession = {
+    id: cleanId,
+    team_name: team,
+    participant_name: participant,
+    current_round: 1,
+    current_question_index: 0,
+    status: 'active',
+    score: 0,
+    created_at: now,
+    updated_at: now,
+  };
+
+  await db.collection(FIRESTORE_COLLECTIONS.TEAM_SESSIONS).doc(cleanId).set(session);
+  return session;
+}
+
+export async function resetTeamSession(participantId: string): Promise<TeamSession> {
+  return await initOrResetTeamSession(participantId);
+}
+
+export async function getTeamCurrentPublicQuestion(
+  participantId: string,
+  teamName?: string,
+  participantName?: string
+): Promise<{ question: PublicQuestion | null; session: TeamSession; totalInRound: number }> {
+  let session = await getTeamSession(participantId);
+  if (!session) {
+    session = await initOrResetTeamSession(participantId, teamName, participantName);
+  }
+
+  if (session.status === 'completed') {
+    return { question: null, session, totalInRound: 0 };
+  }
+
+  const settings = await getGameSettings();
+  let roundQuestions = (await getQuestions(session.current_round)).filter((q) => q.active);
+
+  if (roundQuestions.length === 0) {
+    roundQuestions = (await getQuestions()).filter((q) => q.active);
+  }
+
+  if (roundQuestions.length === 0) {
+    return { question: null, session, totalInRound: 0 };
+  }
+
+  // If index is past the end of round questions, try next round or complete
+  if (session.current_question_index >= roundQuestions.length) {
+    const nextRound = session.current_round + 1;
+    const nextQuestions = (await getQuestions(nextRound)).filter((q) => q.active);
+
+    if (nextQuestions.length > 0 && nextRound <= settings.total_rounds) {
+      session = {
+        ...session,
+        current_round: nextRound,
+        current_question_index: 0,
+        status: 'active',
+        updated_at: new Date().toISOString(),
+      };
+      const db = getFirestoreDb();
+      await db.collection(FIRESTORE_COLLECTIONS.TEAM_SESSIONS).doc(session.id).set(session, { merge: true });
+      roundQuestions = nextQuestions;
+    } else {
+      session = {
+        ...session,
+        status: 'completed',
+        updated_at: new Date().toISOString(),
+      };
+      const db = getFirestoreDb();
+      await db.collection(FIRESTORE_COLLECTIONS.TEAM_SESSIONS).doc(session.id).set(session, { merge: true });
+      try {
+        await recordParticipantScore(session.id, session.team_name, session.participant_name);
+        await syncWinnersPodium();
+      } catch (e) {
+        console.error('Error finalizing score for completed team session:', e);
+      }
+      return { question: null, session, totalInRound: 0 };
+    }
+  }
+
+  const q = roundQuestions[session.current_question_index];
+  const formatted = formatPublicQuestion(q, session.current_question_index, roundQuestions.length);
+  return { question: formatted, session, totalInRound: roundQuestions.length };
+}
+
+export async function advanceTeamSession(
+  participantId: string,
+  teamName?: string
+): Promise<{ session: TeamSession; completed: boolean; advancedRound: boolean; message: string }> {
+  let session = await getTeamSession(participantId);
+  if (!session) {
+    session = await initOrResetTeamSession(participantId, teamName);
+  }
+
+  const settings = await getGameSettings();
+  const roundQuestions = (await getQuestions(session.current_round)).filter((q) => q.active);
+  const nextIndex = session.current_question_index + 1;
+  const now = new Date().toISOString();
+  const db = getFirestoreDb();
+
+  if (nextIndex < roundQuestions.length) {
+    const updatedSession: TeamSession = {
+      ...session,
+      current_question_index: nextIndex,
+      status: 'active',
+      updated_at: now,
+    };
+    await db.collection(FIRESTORE_COLLECTIONS.TEAM_SESSIONS).doc(session.id).set(updatedSession, { merge: true });
+    return {
+      session: updatedSession,
+      completed: false,
+      advancedRound: false,
+      message: `Advanced to Question ${nextIndex + 1}`,
+    };
+  } else {
+    const nextRound = session.current_round + 1;
+    const nextRoundQuestions = (await getQuestions(nextRound)).filter((q) => q.active);
+
+    if (nextRoundQuestions.length > 0 && nextRound <= settings.total_rounds) {
+      const updatedSession: TeamSession = {
+        ...session,
+        current_round: nextRound,
+        current_question_index: 0,
+        status: 'active',
+        updated_at: now,
+      };
+      await db.collection(FIRESTORE_COLLECTIONS.TEAM_SESSIONS).doc(session.id).set(updatedSession, { merge: true });
+      return {
+        session: updatedSession,
+        completed: false,
+        advancedRound: true,
+        message: `Advanced to Round ${nextRound}!`,
+      };
+    } else {
+      const updatedSession: TeamSession = {
+        ...session,
+        status: 'completed',
+        updated_at: now,
+      };
+      await db.collection(FIRESTORE_COLLECTIONS.TEAM_SESSIONS).doc(session.id).set(updatedSession, { merge: true });
+      try {
+        await recordParticipantScore(session.id, session.team_name, session.participant_name);
+        await syncWinnersPodium();
+      } catch (syncErr) {
+        console.error('Error synchronizing winners on team completion:', syncErr);
+      }
+      return {
+        session: updatedSession,
+        completed: true,
+        advancedRound: false,
+        message: 'Symposium Quiz Completed! Check the Winners tab.',
+      };
+    }
+  }
+}
+
